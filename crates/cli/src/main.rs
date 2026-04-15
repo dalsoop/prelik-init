@@ -19,12 +19,22 @@ enum Cmd {
     Available,
     /// 현재 설치된 도메인
     List,
-    /// 도메인 설치
-    Install { domain: String },
-    /// 도메인 제거
-    Remove { domain: String },
-    /// 도메인 업데이트 (install과 동일 동작 — 최신 릴리스 재다운로드)
-    Update { domain: String },
+    /// 도메인 설치 (여러 개 공백 구분 가능, --preset으로 번들)
+    Install {
+        /// 도메인 이름 (공백 구분, 여러 개)
+        domains: Vec<String>,
+        /// 프리셋 이름 (web, mail, full, dev, minimal)
+        #[arg(long)]
+        preset: Option<String>,
+    },
+    /// 도메인 제거 (여러 개 가능)
+    Remove {
+        domains: Vec<String>,
+    },
+    /// 도메인 업데이트 (여러 개 가능)
+    Update {
+        domains: Vec<String>,
+    },
     /// 전체 업그레이드 (미구현)
     Upgrade,
     /// 도메인 실행
@@ -46,9 +56,9 @@ fn main() -> anyhow::Result<()> {
         Cmd::Setup => setup(),
         Cmd::Available => list_available(),
         Cmd::List => list_installed(),
-        Cmd::Install { domain } => install(&domain),
-        Cmd::Remove { domain } => remove(&domain),
-        Cmd::Update { domain } => install(&domain),
+        Cmd::Install { domains, preset } => install_many(domains, preset.as_deref()),
+        Cmd::Remove { domains } => remove_many(&domains),
+        Cmd::Update { domains } => install_many(domains, None),
         Cmd::Upgrade => {
             println!("(미구현) 전체 업그레이드 예정");
             Ok(())
@@ -172,6 +182,12 @@ fn list_available() -> anyhow::Result<()> {
             println!("  {:<12} {}", d.name, d.description);
         }
     }
+    println!("\n프리셋 (--preset 으로 한 번에 설치):");
+    println!("  web         웹 호스팅 (bootstrap, lxc, traefik, cloudflare)");
+    println!("  mail        메일 스택 (bootstrap, lxc, mail, cloudflare, connect)");
+    println!("  full        전체 도메인");
+    println!("  dev         개발 도구 (bootstrap, ai, connect)");
+    println!("  minimal     필수 최소 (bootstrap)");
     Ok(())
 }
 
@@ -190,6 +206,64 @@ fn list_installed() -> anyhow::Result<()> {
     }
     if count == 0 {
         println!("  (없음)");
+    }
+    Ok(())
+}
+
+/// 프리셋 이름 → 도메인 리스트
+fn resolve_preset(name: &str) -> Option<Vec<String>> {
+    match name {
+        "web" => Some(vec!["bootstrap", "lxc", "traefik", "cloudflare"]),
+        "mail" => Some(vec!["bootstrap", "lxc", "mail", "cloudflare", "connect"]),
+        "full" => Some(vec!["lxc", "traefik", "mail", "cloudflare", "connect", "ai"]),
+        "minimal" => Some(vec!["bootstrap"]),
+        "dev" => Some(vec!["bootstrap", "ai", "connect"]),
+        _ => None,
+    }.map(|v| v.into_iter().map(String::from).collect())
+}
+
+fn install_many(mut domains: Vec<String>, preset: Option<&str>) -> anyhow::Result<()> {
+    if let Some(p) = preset {
+        let expanded = resolve_preset(p)
+            .ok_or_else(|| anyhow::anyhow!("알 수 없는 프리셋: {p} (web/mail/full/dev/minimal)"))?;
+        println!("=== 프리셋 '{p}' 설치: {} ===\n", expanded.join(", "));
+        // preset 먼저, 그 뒤 명시적 domains (중복 제거)
+        let mut all = expanded;
+        for d in &domains {
+            if !all.contains(d) {
+                all.push(d.clone());
+            }
+        }
+        domains = all;
+    }
+    if domains.is_empty() {
+        anyhow::bail!("설치할 도메인 없음. 예: prelik install bootstrap lxc --preset mail");
+    }
+
+    let total = domains.len();
+    let mut failed = vec![];
+    for (i, d) in domains.iter().enumerate() {
+        println!("[{}/{total}] {d}", i + 1);
+        if let Err(e) = install(d) {
+            eprintln!("  ✗ {d}: {e}");
+            failed.push(d.clone());
+        }
+    }
+
+    if !failed.is_empty() {
+        anyhow::bail!("{}개 도메인 설치 실패: {}", failed.len(), failed.join(", "));
+    }
+    Ok(())
+}
+
+fn remove_many(domains: &[String]) -> anyhow::Result<()> {
+    if domains.is_empty() {
+        anyhow::bail!("제거할 도메인 이름 필요");
+    }
+    for d in domains {
+        if let Err(e) = remove(d) {
+            eprintln!("  ✗ {d}: {e}");
+        }
     }
     Ok(())
 }

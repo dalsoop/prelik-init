@@ -2,6 +2,18 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.7.0] - 2026-04-15
+
+### Added
+- 다중 도메인 설치: `prelik install bootstrap lxc traefik` (공백 구분)
+- 프리셋: `prelik install --preset web/mail/full/dev/minimal`
+- `ncl/presets.ncl` 레지스트리
+- `prelik available`이 프리셋 목록도 표시
+- `prelik remove/update`도 다중 도메인 지원
+
+### Changed
+- install 실패 시 개별 실패 기록 + 전체 결과에 fail count 반영
+
 ## [0.6.0] - 2026-04-15
 
 ### Added
