@@ -65,55 +65,82 @@ prelik run lxc delete <VMID> --force   # 디스크까지 삭제
 
 ## 3. NAS 마운트 (fstab + credentials) — 순서 엄수
 
-`prelik run nas mount`로 추가한 SMB/NFS 마운트가 `/etc/fstab`에 남아 있습니다.
+`prelik run nas mount`는 SMB/CIFS와 NFS 마운트 둘 다 `/etc/fstab`에 영구 등록합니다. 각 경로가 다르니 둘 다 살펴야 합니다.
 
-> ⚠️ **순서가 중요합니다.** 아래 단계는 "fstab 라인 삭제 전에 credentials 경로를 캡처"하는 순서로 배치돼 있습니다. 순서를 바꾸면 fstab이 먼저 지워져서 어느 credential 파일이 prelik 것인지 역추적 불가능하게 됩니다.
+### 3.1 SMB/CIFS 정리 (credentials 파일 포함)
+
+> ⚠️ **순서가 중요합니다.** fstab 라인을 먼저 지우면 어느 credential 파일이 prelik 것인지 역추적 불가능. 아래 단계는 "캡처 → 편집 → 삭제" 순서로 배치돼 있습니다.
 >
-> prelik은 credentials 파일에 provenance 마커를 남기지 않고, 파일명 생성 규칙(host/share 비영숫자 → `_`)은 비단사입니다. 유일하게 신뢰할 수 있는 정보는 fstab 라인의 `credentials=<path>` 값 자체입니다.
+> prelik의 CIFS 라인 시그니처: fstab 옵션 필드에 `credentials=/etc/cifs-credentials/…` 경로가 들어갑니다. 이 prefix 경로는 prelik 전용이라 필터로 충분히 정확합니다. 타 관리자도 동일한 디렉토리를 쓰면 아래 단계에서 공유될 수 있으니 `sudo ls /etc/cifs-credentials/`로 사전 확인을 권장합니다.
 
 ```bash
-# 1) 현재 CIFS/NFS 마운트 목록 확인
-findmnt --target /mnt | grep -E "cifs|nfs"
+# 1) 현재 CIFS 마운트 확인
+findmnt --target /mnt | awk '$NF ~ /cifs|smb/'
 
-# 2) prelik이 추가한 fstab 라인 식별 — prelik 관리 마운트는 '_netdev,nofail' 옵션과
-#    'credentials=/etc/cifs-credentials/' 경로를 함께 갖습니다. 이 두 조건을 모두 쓰면
-#    타 시스템 관리자가 추가한 CIFS 마운트와 구분됩니다.
-sudo grep -nE '_netdev,nofail.*credentials=/etc/cifs-credentials/' /etc/fstab
-# 출력이 있으면 그 라인이 prelik이 추가한 것. 없으면 이 섹션은 건너뜀.
+# 2) prelik SMB fstab 라인 식별 (credentials 경로 단독 필터 — 옵션 순서 무관)
+sudo grep -nE 'credentials=/etc/cifs-credentials/' /etc/fstab
+# 출력이 없으면 3.1은 건너뜀.
 
-# 3) ★ 순서 중요 ★ — fstab 편집 전에 credentials 파일 경로를 먼저 변수로 캡처
-CRED_PATHS=$(sudo grep -E '_netdev,nofail.*credentials=/etc/cifs-credentials/' /etc/fstab \
+# 3) ★ 순서 중요 ★ — fstab 편집 전에 credentials 경로를 변수로 먼저 캡처
+CRED_PATHS=$(sudo grep -E 'credentials=/etc/cifs-credentials/' /etc/fstab \
   | grep -oE 'credentials=[^, ]+' | cut -d= -f2- | sort -u)
 echo "prelik 관리 credentials 파일:"
 printf '  %s\n' $CRED_PATHS
 
-# 4) 마운트 목록에서 prelik 라인의 mount point 확인 후 umount
-sudo grep -E '_netdev,nofail.*credentials=/etc/cifs-credentials/' /etc/fstab | awk '{print $2}'
+# 4) 해당 라인의 mount point 추출 후 각각 umount
+sudo grep -E 'credentials=/etc/cifs-credentials/' /etc/fstab | awk '{print $2}'
 # 위 출력으로 나온 각 경로에 대해:
 sudo umount /mnt/<your-prelik-mount>
 
-# 5) fstab에서 해당 prelik 라인만 제거 (다른 CIFS 라인은 보존)
-sudo sed -i.bak '/_netdev,nofail.*credentials=\/etc\/cifs-credentials\//d' /etc/fstab
-# /etc/fstab.bak에 원본 백업됨. 다른 관리자의 라인이 실수로 지워졌는지 diff로 확인 권장:
-diff /etc/fstab.bak /etc/fstab
+# 5) fstab에서 prelik SMB 라인만 제거. sed -i.bak로 백업.
+sudo sed -i.bak '/credentials=\/etc\/cifs-credentials\//d' /etc/fstab
+# 의도하지 않은 삭제 확인:
+sudo diff /etc/fstab.bak /etc/fstab
 
-# 6) 3)에서 캡처한 경로만 정확히 삭제 — 다른 CIFS mount의 cred는 보존
+# 6) 캡처한 credentials 파일만 정확히 삭제
 for p in $CRED_PATHS; do
   sudo rm -f "$p"
 done
 
-# 7) 디렉토리가 비었을 때만 rmdir (다른 CIFS mount의 cred가 남아 있으면 보존)
+# 7) 디렉토리가 비었을 때만 rmdir (다른 credential 보존)
 sudo rmdir /etc/cifs-credentials 2>/dev/null || true
 
-# 8) fstab 변경 후 잘못된 항목 없는지 검증
+# 8) 최종 검증
 sudo mount -a
 ```
 
-**안전 장치 요약:**
-- `_netdev,nofail` + `/etc/cifs-credentials/` 조합 필터로 prelik-specific 범위 확보
+### 3.2 NFS 정리
+
+NFS는 credentials 파일이 없고, prelik이 등록한 fstab 라인 형식은 다음과 같습니다:
+
+```
+<server>:<export>  <mount-point>  nfs  _netdev,nofail  0  0
+```
+
+이 필드 조합(type=`nfs` + 옵션=`_netdev,nofail`)이 prelik 시그니처입니다. 타 관리자가 NFS를 수동 등록했고 같은 옵션을 썼다면 구분되지 않으니, **삭제 전 반드시 라인을 사람이 확인**하세요.
+
+```bash
+# 1) prelik NFS 라인 식별 (type 필드가 3번째 컬럼, 옵션이 4번째)
+sudo awk '$3 == "nfs" && $4 == "_netdev,nofail" { print NR": "$0 }' /etc/fstab
+
+# 2) 각 라인의 mount point 확인 후 umount
+sudo awk '$3 == "nfs" && $4 == "_netdev,nofail" { print $2 }' /etc/fstab
+# 각 mount point에 대해:
+sudo umount /mnt/<your-prelik-nfs-mount>
+
+# 3) fstab에서 prelik NFS 라인만 제거 (awk로 필터링 후 atomic replace)
+sudo awk '!($3 == "nfs" && $4 == "_netdev,nofail")' /etc/fstab > /tmp/fstab.new
+sudo diff /etc/fstab /tmp/fstab.new   # 삭제 예정 라인 확인
+sudo cp /etc/fstab /etc/fstab.bak && sudo mv /tmp/fstab.new /etc/fstab
+
+# 4) 최종 검증
+sudo mount -a
+```
+
+**전반 안전 장치:**
 - 캡처 → 편집 → 삭제 순서 (편집이 먼저 오면 추적 불가)
-- `sed -i.bak`로 fstab 백업 → diff로 의도하지 않은 삭제 검증
-- `mount -a`로 최종 검증
+- fstab.bak 백업 + diff 검증
+- `mount -a`로 잘못된 항목 없는지 최종 확인
 
 **검증:**
 ```bash
