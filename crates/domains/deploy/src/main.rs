@@ -59,6 +59,7 @@ struct ServiceMeta {
 }
 
 #[derive(Deserialize, Default)]
+#[allow(dead_code)]
 struct LxcSpec {
     #[serde(default = "default_cores")]
     cores: String,
@@ -150,13 +151,14 @@ fn service(
     let final_disk = disk.unwrap_or(&recipe.lxc.disk);
 
     // [1/3] LXC 생성 — prelik-lxc 호출
+    // IP는 bare 또는 CIDR 그대로 전달. lxc 도메인이 config.network.subnet 참조하여
+    // 최종 CIDR 결정 (deploy에서 /16 강제하면 다른 서브넷 환경 깨짐).
     println!("\n[1/3] LXC 생성 → prelik-lxc create");
-    let ip_cidr = if ip.contains('/') { ip.to_string() } else { format!("{ip}/16") };
     let args: Vec<&str> = vec![
         "create",
         "--vmid", vmid,
         "--hostname", hostname,
-        "--ip", &ip_cidr,
+        "--ip", ip,
         "--cores", final_cores,
         "--memory", final_memory,
         "--disk", final_disk,
@@ -185,7 +187,7 @@ fn service(
         println!("\n[3/3] 커스텀 스크립트: (없음)");
     }
 
-    println!("\n✓ {} 배포 완료 (VMID {vmid}, {ip_cidr})", recipe.service.name);
+    println!("\n✓ {} 배포 완료 (VMID {vmid}, IP {ip})", recipe.service.name);
     Ok(())
 }
 
