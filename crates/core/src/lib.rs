@@ -8,3 +8,4 @@ pub mod github;
 pub mod os;
 pub mod paths;
 pub mod systemd;
+pub mod registry;

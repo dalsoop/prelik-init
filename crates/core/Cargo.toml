@@ -2,6 +2,7 @@
 name = "prelik-core"
 version.workspace = true
 edition.workspace = true
+build = "build.rs"
 
 [dependencies]
 serde = { workspace = true }

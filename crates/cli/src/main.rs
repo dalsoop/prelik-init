@@ -41,10 +41,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Setup => setup(),
-        Cmd::Available => {
-            list_available();
-            Ok(())
-        }
+        Cmd::Available => list_available(),
         Cmd::List => list_installed(),
         Cmd::Install { domain } => install(&domain),
         Cmd::Remove { domain } => remove(&domain),
@@ -79,20 +76,20 @@ fn setup() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn list_available() {
-    let domains = [
-        ("bootstrap", "apt/rust/gh/dotenvx 의존성 설치"),
-        ("connect", "외부 서비스 연결 관리 (.env + dotenvx)"),
-        ("lxc", "LXC 수명 관리 (Proxmox pct 래퍼)"),
-        ("traefik", "Traefik 리버스 프록시"),
-        ("mail", "Maddy + Mailpit + Postfix relay 번들"),
-        ("cloudflare", "CF DNS/Email Routing/Worker"),
-        ("ai", "Claude/Codex + 플러그인"),
-    ];
+fn list_available() -> anyhow::Result<()> {
+    let reg = prelik_core::registry::Registry::load()?;
     println!("사용 가능한 도메인:");
-    for (name, desc) in &domains {
-        println!("  {name:<12} {desc}");
+    for d in reg.available() {
+        println!("  {:<12} {}", d.name, d.description);
     }
+    let planned = reg.planned();
+    if !planned.is_empty() {
+        println!("\n예정(아직 미구현):");
+        for d in planned {
+            println!("  {:<12} {}", d.name, d.description);
+        }
+    }
+    Ok(())
 }
 
 fn list_installed() -> anyhow::Result<()> {
