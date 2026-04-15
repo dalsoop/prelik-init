@@ -1,6 +1,7 @@
 //! prelik-monitor — 호스트/LXC/VM 리소스 모니터링 (read-only).
 
 use clap::{Parser, Subcommand};
+use prelik_core::common;
 use std::fs;
 use std::process::Command;
 
@@ -71,8 +72,7 @@ fn bin_ok(b: &str) -> &'static str {
     if which(b) { "✓" } else { "✗" }
 }
 fn which(b: &str) -> bool {
-    // 외부 which 바이너리 의존 회피 — PATH 직접 탐색 (which crate)
-    ::which::which(b).is_ok()
+    common::has_cmd(b)
 }
 
 fn host() -> anyhow::Result<()> {

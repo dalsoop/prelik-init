@@ -103,8 +103,7 @@ fn doctor() -> anyhow::Result<()> {
 }
 
 fn which(bin: &str) -> bool {
-    // 외부 which 바이너리 의존 회피 — PATH 직접 탐색 (which crate)
-    ::which::which(bin).is_ok()
+    common::has_cmd(bin)
 }
 
 fn list(filter_storage: Option<&str>) -> anyhow::Result<()> {
@@ -175,10 +174,10 @@ fn storage_add_cifs(
         None => std::env::var("SMB_PASSWORD")
             .map_err(|_| anyhow::anyhow!("--password 또는 SMB_PASSWORD 환경변수 필요"))?,
     };
-    // 비밀번호는 argv로 전달 (pvesm 한계). 단, 실패 시 에러 메시지에 평문이 남지 않도록
-    // common::run을 우회해서 직접 spawn하고 stdout/stderr만 통과시킨다 (Display 마스킹).
-    let status = std::process::Command::new("pvesm")
-        .args([
+    // 비밀번호는 argv로 전달 (pvesm 한계). run_secret으로 실패 시 argv 비노출.
+    common::run_secret(
+        "pvesm",
+        &[
             "add", "cifs", id,
             "--server", server,
             "--share", share,
@@ -186,17 +185,9 @@ fn storage_add_cifs(
             "--password", &pw,
             "--content", "iso",
             "--smbversion", smb_version,
-        ])
-        .status()
-        .map_err(|e| anyhow::anyhow!("pvesm spawn 실패: {e}"))?;
-    if !status.success() {
-        // argv 비공개 — 에러는 종료 코드만 노출
-        anyhow::bail!(
-            "pvesm add cifs {id} 실패 (exit {}). server/share/username/SMB 권한을 확인하세요. \
-             (--password 평문 보호를 위해 argv는 메시지에 포함하지 않음)",
-            status.code().unwrap_or(-1)
-        );
-    }
+        ],
+        &format!("pvesm add cifs {id}"),
+    )?;
     println!("✓ {id} 등록 완료 (참조: {id}:iso/<filename>.iso)");
     Ok(())
 }
