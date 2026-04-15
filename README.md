@@ -70,6 +70,15 @@ prelik run ai codex-plugin-install --fork
 prelik doctor
 ```
 
+### 도구 단위 설치/제거 (bootstrap)
+
+```bash
+prelik run bootstrap list              # 각 도구 상태
+prelik run bootstrap install           # 전부 설치
+prelik run bootstrap install --only nickel,rust    # 선택 설치
+prelik run bootstrap remove  --only nickel         # 선택 제거
+```
+
 ---
 
 ## 도메인

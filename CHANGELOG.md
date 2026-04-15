@@ -2,6 +2,25 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.8.0] - 2026-04-15
+
+### Added
+- **도구 단위 개별 install/remove**: `prelik run bootstrap install --only rust,nickel`
+  처럼 원하는 도구만 설치하거나 제거 가능. 기존 "전체 한꺼번에"가 단일
+  선택지였던 문제 해결.
+- `prelik run bootstrap list` — 각 도구의 현재 설치 상태 확인
+- `Tool` enum (apt/rust/gh/dotenvx/nickel) + 각자 install/remove 함수
+
+### Changed
+- `bootstrap install` (인자 없음) = 기본적으로 **5개 전부** 설치 (기존 동일 동작)
+- `bootstrap install --only X,Y` = X, Y만 설치
+- `bootstrap remove --only X,Y` = X, Y만 제거
+- `bootstrap doctor` 출력 포맷 단순화
+
+### Honesty
+- phs 대비 prelik 포팅 비율 ~23%. 아직 phs의 nas/workspace/telegram/account/
+  host/config/homelable/comfyui/dalcenter 등 미이식. "공유 가능"이지 "phs 대체"는 아님.
+
 ## [0.7.8] - 2026-04-15
 
 ### Fixed (Codex 7차 — v0.7.7 회귀 수정)
