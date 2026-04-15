@@ -162,7 +162,18 @@ fn fstab_add(target: &str, fstab_line: &str) -> anyhow::Result<()> {
     // read_to_string(...).unwrap_or_default() 패턴은 /etc/fstab 읽기 실패 시
     // 빈 파일로 "덮어쓰기"하는 재앙 유발 가능 (권한 0640 하드닝 등).
     // tee -a는 기존 내용 보존하며 append만.
-    let line_with_nl = format!("{fstab_line}\n");
+    //
+    // EOF 개행 없는 fstab 대응: sudo로 마지막 바이트 확인 후 필요시 앞에 \n 추가.
+    // EOF 바이트 체크는 tail -c1로 보안 없이.
+    let last_byte = std::process::Command::new("sudo")
+        .args(["sh", "-c", "tail -c1 /etc/fstab 2>/dev/null | od -An -tx1 | tr -d ' \n'"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let needs_leading_nl = !last_byte.is_empty() && last_byte != "0a";
+    let prefix = if needs_leading_nl { "\n" } else { "" };
+    let line_with_nl = format!("{prefix}{fstab_line}\n");
     let output = std::process::Command::new("sudo")
         .args(["tee", "-a", "/etc/fstab"])
         .stdin(std::process::Stdio::piped())
