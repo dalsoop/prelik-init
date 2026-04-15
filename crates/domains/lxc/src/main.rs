@@ -173,14 +173,9 @@ fn snapshot_create(vmid: &str, name: &str, description: Option<&str>) -> anyhow:
     Ok(())
 }
 
-fn snapshot_list(vmid: &str, json: bool) -> anyhow::Result<()> {
-    let out = common::run("pct", &["listsnapshot", vmid])?;
-    if !json {
-        println!("{out}");
-        return Ok(());
-    }
-    // 실제 출력 형식: `-> name [YYYY-MM-DD HH:MM:SS] description...
-    // current는 timestamp 없이 "You are here!"만 옴 → skip.
+// 실제 형식: `-> name [YYYY-MM-DD HH:MM:SS] description...
+// current는 timestamp 없이 "You are here!"만 옴 → skip.
+fn parse_pct_listsnapshot(out: &str) -> anyhow::Result<Vec<SnapshotRow>> {
     let mut rows = Vec::new();
     for l in out.lines() {
         let trimmed = l.trim_start_matches(|c: char| {
@@ -191,8 +186,6 @@ fn snapshot_list(vmid: &str, json: bool) -> anyhow::Result<()> {
         if toks.is_empty() { continue; }
         let name = toks[0].to_string();
         if name == "current" { continue; }
-        // 2번째 토큰이 YYYY-MM-DD 패턴이면 timestamp = "tok1 tok2", 나머지 = description.
-        // 아니면 fail-fast (자동화 안전).
         let date_ok = toks.get(1).map(|t| {
             let b = t.as_bytes();
             t.len() == 10 && b[4] == b'-' && b[7] == b'-'
@@ -216,6 +209,16 @@ fn snapshot_list(vmid: &str, json: bool) -> anyhow::Result<()> {
         let description = toks.iter().skip(3).copied().collect::<Vec<_>>().join(" ");
         rows.push(SnapshotRow { name, timestamp, description });
     }
+    Ok(rows)
+}
+
+fn snapshot_list(vmid: &str, json: bool) -> anyhow::Result<()> {
+    let out = common::run("pct", &["listsnapshot", vmid])?;
+    if !json {
+        println!("{out}");
+        return Ok(());
+    }
+    let rows = parse_pct_listsnapshot(&out)?;
     println!("{}", serde_json::to_string_pretty(&rows)?);
     Ok(())
 }
@@ -264,14 +267,8 @@ fn require_proxmox() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn list(json: bool) -> anyhow::Result<()> {
-    let out = common::run("pct", &["list"])?;
-    if !json {
-        println!("{out}");
-        return Ok(());
-    }
-    // pct list 헤더: VMID Status Lock Name. Lock이 비어 있으면 컬럼이 1개 줄어듦.
-    // 자동화 모드는 fail-fast — 예상 못 한 라인이 있으면 bail!.
+// 순수 파서 — 회귀 테스트 용이.
+fn parse_pct_list(out: &str) -> anyhow::Result<Vec<LxcRow>> {
     let mut rows = Vec::new();
     for l in out.lines().skip(1) {
         if l.trim().is_empty() { continue; }
@@ -290,8 +287,38 @@ fn list(json: bool) -> anyhow::Result<()> {
         };
         rows.push(row);
     }
+    Ok(rows)
+}
+
+fn list(json: bool) -> anyhow::Result<()> {
+    let out = common::run("pct", &["list"])?;
+    if !json {
+        println!("{out}");
+        return Ok(());
+    }
+    let rows = parse_pct_list(&out)?;
     println!("{}", serde_json::to_string_pretty(&rows)?);
     Ok(())
+}
+
+// upstream pve-container `pct status` 실제 출력값:
+//   정상: "running", "stopped"
+//   $stat->{status}가 없을 때 fallback: "unknown"
+// paused/suspended는 LXC 미적용 (VM은 prelik-vm 별도).
+const STATUS_KNOWN: &[&str] = &["running", "stopped", "unknown"];
+
+// raw stdout만 받아 엄격 검증 — 순수 함수.
+fn parse_pct_status(raw: &str) -> anyhow::Result<&str> {
+    let body = raw.strip_suffix('\n').unwrap_or(raw);
+    if body.contains('\n') {
+        anyhow::bail!("pct status 출력이 단일 라인이 아님: {raw:?}");
+    }
+    let value = body.strip_prefix("status: ")
+        .ok_or_else(|| anyhow::anyhow!("pct status 출력 형식이 'status: <value>' 아님: {raw:?}"))?;
+    if !STATUS_KNOWN.contains(&value) {
+        anyhow::bail!("pct status 값이 알 수 없는 형태: {value:?} (허용: {STATUS_KNOWN:?})");
+    }
+    Ok(value)
 }
 
 fn status(vmid: &str, json: bool) -> anyhow::Result<()> {
@@ -300,27 +327,12 @@ fn status(vmid: &str, json: bool) -> anyhow::Result<()> {
         println!("{out}");
         return Ok(());
     }
-    // JSON 경로는 raw stdout을 받아 엄격 검증 (common::run의 trim 회피).
     let output = std::process::Command::new("pct").args(["status", vmid]).output()?;
     if !output.status.success() {
         anyhow::bail!("pct status {vmid} 실패: {}", String::from_utf8_lossy(&output.stderr));
     }
     let raw = String::from_utf8(output.stdout)?;
-    // 정확히 "status: <value>\n" 한 줄만 허용 — 트레일링 \n 1개까지만.
-    let body = raw.strip_suffix('\n').unwrap_or(&raw);
-    if body.contains('\n') {
-        anyhow::bail!("pct status 출력이 단일 라인이 아님: {raw:?}");
-    }
-    let value = body.strip_prefix("status: ")
-        .ok_or_else(|| anyhow::anyhow!("pct status 출력 형식이 'status: <value>' 아님: {raw:?}"))?;
-    // upstream pve-container `pct status` 실제 출력값과 일치하는 whitelist:
-    //   - 정상: "running", "stopped"
-    //   - $stat->{status}가 없을 때 fallback: "unknown"
-    // (paused/suspended는 LXC 도메인엔 적용 안 됨 — VM은 prelik-vm 별도)
-    const KNOWN: &[&str] = &["running", "stopped", "unknown"];
-    if !KNOWN.contains(&value) {
-        anyhow::bail!("pct status 값이 알 수 없는 형태: {value:?} (허용: {KNOWN:?})");
-    }
+    let value = parse_pct_status(&raw)?;
     let payload = serde_json::json!({ "vmid": vmid, "status": value });
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
@@ -463,4 +475,144 @@ fn doctor() {
     println!("  pveam:     {}", if common::has_cmd("pveam") { "✓" } else { "✗" });
     println!("  pvesh:     {}", if common::has_cmd("pvesh") { "✓" } else { "✗" });
     println!("  proxmox:   {}", if os::is_proxmox() { "✓" } else { "✗" });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ----- parse_pct_status -----
+
+    #[test]
+    fn status_running() {
+        assert_eq!(parse_pct_status("status: running\n").unwrap(), "running");
+    }
+
+    #[test]
+    fn status_stopped_no_trailing_newline() {
+        assert_eq!(parse_pct_status("status: stopped").unwrap(), "stopped");
+    }
+
+    #[test]
+    fn status_unknown_fallback() {
+        assert_eq!(parse_pct_status("status: unknown\n").unwrap(), "unknown");
+    }
+
+    #[test]
+    fn status_rejects_extra_lines() {
+        assert!(parse_pct_status("status: running\nwarning: drift\n").is_err());
+    }
+
+    #[test]
+    fn status_rejects_missing_prefix() {
+        assert!(parse_pct_status("state: running\n").is_err());
+        assert!(parse_pct_status(" status: running\n").is_err());
+    }
+
+    #[test]
+    fn status_rejects_value_drift() {
+        assert!(parse_pct_status("status: \n").is_err());
+        assert!(parse_pct_status("status:  running\n").is_err()); // 2칸 공백
+        assert!(parse_pct_status("status: running \n").is_err()); // 트레일링 공백
+        assert!(parse_pct_status("status: paused\n").is_err());   // VM 전용 값
+    }
+
+    // ----- parse_pct_list -----
+
+    #[test]
+    fn list_4_columns_with_lock() {
+        let out = "VMID       Status     Lock         Name\n\
+                   100        running    backup       myhost\n";
+        let rows = parse_pct_list(out).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].vmid, "100");
+        assert_eq!(rows[0].lock, "backup");
+        assert_eq!(rows[0].name, "myhost");
+    }
+
+    #[test]
+    fn list_4_columns_dash_lock_empties_lock() {
+        let out = "VMID       Status     Lock         Name\n\
+                   100        running    -            myhost\n";
+        let rows = parse_pct_list(out).unwrap();
+        assert_eq!(rows[0].lock, "");
+    }
+
+    #[test]
+    fn list_3_columns_no_lock() {
+        let out = "VMID       Status     Name\n\
+                   100        stopped    myhost\n";
+        let rows = parse_pct_list(out).unwrap();
+        assert_eq!(rows[0].vmid, "100");
+        assert_eq!(rows[0].lock, "");
+        assert_eq!(rows[0].name, "myhost");
+    }
+
+    #[test]
+    fn list_skips_empty_lines() {
+        let out = "VMID       Status     Lock         Name\n\
+                   100        running    -            a\n\
+                   \n\
+                   101        stopped    -            b\n";
+        let rows = parse_pct_list(out).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn list_fails_on_unknown_columns() {
+        let out = "VMID       Status     Lock         Name      Extra\n\
+                   100        running    -            a         x\n";
+        assert!(parse_pct_list(out).is_err());
+    }
+
+    // ----- parse_pct_listsnapshot -----
+
+    #[test]
+    fn snapshot_list_skips_current() {
+        let out = "`-> current                                            You are here!\n";
+        let rows = parse_pct_listsnapshot(out).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn snapshot_list_real_format() {
+        let out = "`-> snap1   2026-04-15 09:04:11     no-description\n\
+                   `-> current                                You are here!\n";
+        let rows = parse_pct_listsnapshot(out).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "snap1");
+        assert_eq!(rows[0].timestamp, "2026-04-15 09:04:11");
+        assert_eq!(rows[0].description, "no-description");
+    }
+
+    #[test]
+    fn snapshot_list_multi_word_description() {
+        let out = "`-> snap1 2026-04-15 09:04:11 hello world\n";
+        let rows = parse_pct_listsnapshot(out).unwrap();
+        assert_eq!(rows[0].description, "hello world");
+    }
+
+    #[test]
+    fn snapshot_list_rejects_bad_date() {
+        let out = "`-> snap1 2026-04 09:04:11 desc\n";
+        assert!(parse_pct_listsnapshot(out).is_err());
+    }
+
+    #[test]
+    fn snapshot_list_rejects_bad_time() {
+        let out = "`-> snap1 2026-04-15 BAD desc\n";
+        assert!(parse_pct_listsnapshot(out).is_err());
+    }
+
+    #[test]
+    fn snapshot_list_rejects_missing_time() {
+        let out = "`-> snap1 2026-04-15\n";
+        assert!(parse_pct_listsnapshot(out).is_err());
+    }
+
+    #[test]
+    fn snapshot_list_rejects_non_digit_date() {
+        let out = "`-> snap1 20XX-04-15 09:04:11 desc\n";
+        assert!(parse_pct_listsnapshot(out).is_err());
+    }
 }

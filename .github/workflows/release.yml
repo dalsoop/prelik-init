@@ -35,6 +35,9 @@ jobs:
           else
             cargo build --release --target ${{ matrix.rust_target }}
           fi
+      - name: Unit tests (parser regression)
+        if: matrix.target == 'x86_64-linux'
+        run: cargo test --release --target ${{ matrix.rust_target }}
       - name: Smoke test
         if: matrix.target == 'x86_64-linux'
         run: bash tests/smoke.sh target/${{ matrix.rust_target }}/release
