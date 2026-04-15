@@ -96,8 +96,9 @@ fn doctor() -> anyhow::Result<()> {
     let pvesm = which("pvesm");
     println!("  pvesm     : {}", if pvesm { "✓" } else { "✗ (Proxmox 호스트 필요)" });
     if !pvesm {
-        anyhow::bail!("pvesm 미설치 — Proxmox VE 호스트에서 실행하세요");
+        println!("\n참고: prelik-iso는 Proxmox VE 호스트에서만 동작합니다.");
     }
+    // 다른 도메인의 doctor와 일관성: 누락은 보고만 하고 정상 종료 (CI smoke 호환)
     Ok(())
 }
 
@@ -179,10 +180,10 @@ fn storage_add_cifs(
         None => std::env::var("SMB_PASSWORD")
             .map_err(|_| anyhow::anyhow!("--password 또는 SMB_PASSWORD 환경변수 필요"))?,
     };
-    // 비밀번호는 argv로 직접 전달 (pvesm 특성상 stdin 미지원)
-    common::run(
-        "pvesm",
-        &[
+    // 비밀번호는 argv로 전달 (pvesm 한계). 단, 실패 시 에러 메시지에 평문이 남지 않도록
+    // common::run을 우회해서 직접 spawn하고 stdout/stderr만 통과시킨다 (Display 마스킹).
+    let status = std::process::Command::new("pvesm")
+        .args([
             "add", "cifs", id,
             "--server", server,
             "--share", share,
@@ -190,8 +191,17 @@ fn storage_add_cifs(
             "--password", &pw,
             "--content", "iso",
             "--smbversion", smb_version,
-        ],
-    )?;
+        ])
+        .status()
+        .map_err(|e| anyhow::anyhow!("pvesm spawn 실패: {e}"))?;
+    if !status.success() {
+        // argv 비공개 — 에러는 종료 코드만 노출
+        anyhow::bail!(
+            "pvesm add cifs {id} 실패 (exit {}). server/share/username/SMB 권한을 확인하세요. \
+             (--password 평문 보호를 위해 argv는 메시지에 포함하지 않음)",
+            status.code().unwrap_or(-1)
+        );
+    }
     println!("✓ {id} 등록 완료 (참조: {id}:iso/<filename>.iso)");
     Ok(())
 }
