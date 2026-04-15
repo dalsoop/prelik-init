@@ -81,22 +81,28 @@ sudo umount /mnt/<your-mount>
 sudo nano /etc/fstab    # 또는 sed -i '/PATTERN/d'
 
 # 5) cifs-credentials 파일 제거 (SMB 비밀번호 평문)
-#    ⚠️ 주의 1: prelik nas는 파일명을 "{host}_{share}" 로 만들되,
-#      비영숫자 문자(점/슬래시 등)를 모두 '_'로 치환합니다.
-#      예) //nas.local/data → 'nas_local_data' (점도 _로 치환됨)
-#          //10.0.0.5/media → '10_0_0_5_media'
-#    ⚠️ 주의 2: provenance 마커가 없어 다른 CIFS mount의 자격증명과 구분 불가.
-#      ls로 확인 후 prelik이 추가한 마운트에 해당하는 파일만 골라 삭제.
+#
+#    ⚠️ 파일명 한계 — 가이드를 엄격히 따를 것:
+#    prelik nas는 "{host}_{share}"를 만들고 비영숫자를 '_'로 치환합니다.
+#    이 매핑은 비단사 (nas.local / nas-local / nas_local 모두 'nas_local'로 충돌).
+#    따라서 host/share로부터 역계산한 파일명 삭제는 잘못된 파일을 지울 수 있습니다.
+#
+#    ✅ 정확한 방법: fstab에 남아 있는 'credentials=...' 경로를 직접 읽어 삭제.
+#    (§3 단계 4에서 fstab 라인을 이미 봤으니 그 라인의 실제 경로를 씀)
 
-# 디렉토리 내 파일 확인
-sudo ls -la /etc/cifs-credentials/
+# 1) fstab에서 prelik이 추가한 mount 라인의 credentials= 경로 추출
+sudo grep -oE 'credentials=[^, ]+' /etc/fstab | sort -u
+# 출력 예: credentials=/etc/cifs-credentials/nas_local_data
 
-# 본인이 prelik nas mount로 추가한 host/share에 대응하는 safe_name만 삭제 (예시)
+# 2) 그 경로만 정확히 삭제 (여러 개면 각각)
 sudo rm -f /etc/cifs-credentials/nas_local_data
 
-# 디렉토리가 비었을 때만 (다른 mount의 cred가 남아 있으면 보존)
+# 3) 디렉토리가 비었을 때만 rmdir (다른 mount의 cred가 남아 있으면 보존)
 sudo rmdir /etc/cifs-credentials 2>/dev/null || true
 ```
+
+fstab에서 이미 prelik mount 라인을 제거했다면 위 grep은 아무것도 반환하지 않습니다.
+이 경우 순서를 바꿔 `/etc/fstab` 편집 **전에** 위 1) 단계를 먼저 실행하세요.
 
 **검증:**
 ```bash
