@@ -118,6 +118,19 @@ enum Cmd {
         #[arg(long)]
         disk_expand: Option<String>,
     },
+    /// LXC 초기 설정 (locale + timezone + 기본 패키지)
+    Init {
+        vmid: String,
+        /// 로케일 (기본 ko_KR.UTF-8). "none"이면 설정 스킵.
+        #[arg(long, default_value = "ko_KR.UTF-8")]
+        locale: String,
+        /// 타임존 (기본 Asia/Seoul). "none"이면 설정 스킵.
+        #[arg(long, default_value = "Asia/Seoul")]
+        timezone: String,
+        /// 설치할 기본 패키지 목록 (콤마 분리).
+        #[arg(long, default_value = "git,curl,wget,rsync,tmux,jq,htop,tree,unzip,locales")]
+        packages: String,
+    },
     /// 상태 점검 (pct 존재, PVE 노드 확인)
     Doctor,
 }
@@ -154,6 +167,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::SnapshotRestore { vmid, name } => snapshot_restore(&vmid, &name),
         Cmd::SnapshotDelete { vmid, name } => snapshot_delete(&vmid, &name),
         Cmd::Resize { vmid, cores, memory, disk_expand } => resize(&vmid, cores.as_deref(), memory.as_deref(), disk_expand.as_deref()),
+        Cmd::Init { vmid, locale, timezone, packages } => init_lxc(&vmid, &locale, &timezone, &packages),
         Cmd::Doctor => {
             doctor();
             Ok(())
@@ -615,4 +629,104 @@ mod tests {
         let out = "`-> snap1 20XX-04-15 09:04:11 desc\n";
         assert!(parse_pct_listsnapshot(out).is_err());
     }
+}
+
+// ========== init ==========
+
+fn init_lxc(vmid: &str, locale_v: &str, timezone_v: &str, packages_csv: &str) -> anyhow::Result<()> {
+    println!("=== LXC {vmid} 초기화 ===");
+    require_proxmox()?;
+    // running 상태 확인
+    let status_out = common::run("pct", &["status", vmid])?;
+    if !status_out.contains("running") {
+        println!("[init] LXC 시작 중 (pct start {vmid})");
+        common::run("pct", &["start", vmid])?;
+    }
+
+    if locale_v != "none" {
+        setup_locale(vmid, locale_v)?;
+    }
+    if timezone_v != "none" {
+        setup_timezone(vmid, timezone_v)?;
+    }
+    let pkgs: Vec<&str> = packages_csv.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if !pkgs.is_empty() {
+        install_base_packages(vmid, &pkgs)?;
+    }
+    println!("✓ LXC {vmid} 초기화 완료");
+    Ok(())
+}
+
+fn pct_exec(vmid: &str, script: &str) -> anyhow::Result<String> {
+    common::run("pct", &["exec", vmid, "--", "bash", "-c", script])
+}
+
+fn setup_locale(vmid: &str, locale_v: &str) -> anyhow::Result<()> {
+    // locale_v 검증 — shell injection + locale.gen 비정상 엔트리 방지
+    if !locale_v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+        anyhow::bail!("locale 값이 비정상: {locale_v:?} (예: ko_KR.UTF-8)");
+    }
+    // 이미 설정돼 있으면 skip
+    let current = pct_exec(vmid, "locale 2>&1 || true").unwrap_or_default();
+    if !current.contains("Cannot set") && current.contains(locale_v) {
+        println!("[locale] 이미 {locale_v} 설정됨");
+        return Ok(());
+    }
+    println!("[locale] {locale_v} 설정 중...");
+    let script = format!(
+        "apt-get install -y -qq locales 2>/dev/null && \
+         sed -i '/{locale_v}/s/^# //' /etc/locale.gen && locale-gen && \
+         echo 'LANG={locale_v}' > /etc/default/locale"
+    );
+    pct_exec(vmid, &script)?;
+    // 검증 + fallback (locales-all)
+    let verify = pct_exec(vmid, "locale 2>&1 || true").unwrap_or_default();
+    if verify.contains("Cannot set") {
+        println!("[locale] locale-gen 실패 → locales-all 재시도");
+        pct_exec(vmid, &format!(
+            "apt-get install -y -qq locales-all 2>/dev/null && \
+             echo 'LANG={locale_v}' > /etc/default/locale"
+        ))?;
+    }
+    println!("[locale] ✓ {locale_v}");
+    Ok(())
+}
+
+fn setup_timezone(vmid: &str, tz: &str) -> anyhow::Result<()> {
+    // tz 검증 — zoneinfo 경로 조립 시 traversal 차단
+    if !tz.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' || c == '+') {
+        anyhow::bail!("timezone 값이 비정상: {tz:?} (예: Asia/Seoul)");
+    }
+    if tz.contains("..") || tz.starts_with('/') {
+        anyhow::bail!("timezone 값에 '..' 또는 선행 '/' 금지: {tz:?}");
+    }
+    let current = pct_exec(vmid, "cat /etc/timezone 2>/dev/null || true").unwrap_or_default();
+    if current.trim() == tz {
+        println!("[tz] 이미 {tz}");
+        return Ok(());
+    }
+    println!("[tz] {tz} 설정 중...");
+    let script = format!(
+        "ln -sf /usr/share/zoneinfo/{tz} /etc/localtime && echo '{tz}' > /etc/timezone"
+    );
+    pct_exec(vmid, &script)?;
+    println!("[tz] ✓ {tz}");
+    Ok(())
+}
+
+fn install_base_packages(vmid: &str, pkgs: &[&str]) -> anyhow::Result<()> {
+    for p in pkgs {
+        // 패키지 이름 검증 — apt injection 방지
+        if !p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '+') {
+            anyhow::bail!("패키지 이름이 비정상: {p:?}");
+        }
+    }
+    let joined = pkgs.join(" ");
+    println!("[packages] 설치 중: {joined}");
+    pct_exec(vmid, &format!(
+        "DEBIAN_FRONTEND=noninteractive apt-get update -qq && \
+         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {joined}"
+    ))?;
+    println!("[packages] ✓ {} 개 패키지", pkgs.len());
+    Ok(())
 }
