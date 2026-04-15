@@ -88,6 +88,13 @@ in
       provides = ["deploy service", "deploy list-recipes"],
     } | Domain,
 
+    iso = {
+      name = "iso",
+      description = "Proxmox ISO 스토리지 + ISO 파일 관리 (NFS/CIFS 등록, URL 다운로드)",
+      tags = { product = 'infra, layer = 'remote, platform = 'proxmox },
+      provides = ["iso list", "iso storage-add-nfs", "iso storage-add-cifs", "iso download", "iso remove"],
+    } | Domain,
+
 
 
 
