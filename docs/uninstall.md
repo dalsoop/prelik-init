@@ -63,46 +63,57 @@ prelik run lxc delete <VMID> --force   # 디스크까지 삭제
 
 ---
 
-## 3. NAS 마운트 (fstab + credentials)
+## 3. NAS 마운트 (fstab + credentials) — 순서 엄수
 
 `prelik run nas mount`로 추가한 SMB/NFS 마운트가 `/etc/fstab`에 남아 있습니다.
 
+> ⚠️ **순서가 중요합니다.** 아래 단계는 "fstab 라인 삭제 전에 credentials 경로를 캡처"하는 순서로 배치돼 있습니다. 순서를 바꾸면 fstab이 먼저 지워져서 어느 credential 파일이 prelik 것인지 역추적 불가능하게 됩니다.
+>
+> prelik은 credentials 파일에 provenance 마커를 남기지 않고, 파일명 생성 규칙(host/share 비영숫자 → `_`)은 비단사입니다. 유일하게 신뢰할 수 있는 정보는 fstab 라인의 `credentials=<path>` 값 자체입니다.
+
 ```bash
-# 1) 현재 마운트 확인
+# 1) 현재 CIFS/NFS 마운트 목록 확인
 findmnt --target /mnt | grep -E "cifs|nfs"
 
-# 2) prelik이 추가한 라인 식별 (보통 # prelik-managed 주석 마커 옆)
-sudo grep -n "prelik\|cifs-credentials" /etc/fstab
+# 2) prelik이 추가한 fstab 라인 식별 — prelik 관리 마운트는 '_netdev,nofail' 옵션과
+#    'credentials=/etc/cifs-credentials/' 경로를 함께 갖습니다. 이 두 조건을 모두 쓰면
+#    타 시스템 관리자가 추가한 CIFS 마운트와 구분됩니다.
+sudo grep -nE '_netdev,nofail.*credentials=/etc/cifs-credentials/' /etc/fstab
+# 출력이 있으면 그 라인이 prelik이 추가한 것. 없으면 이 섹션은 건너뜀.
 
-# 3) 언마운트
-sudo umount /mnt/<your-mount>
+# 3) ★ 순서 중요 ★ — fstab 편집 전에 credentials 파일 경로를 먼저 변수로 캡처
+CRED_PATHS=$(sudo grep -E '_netdev,nofail.*credentials=/etc/cifs-credentials/' /etc/fstab \
+  | grep -oE 'credentials=[^, ]+' | cut -d= -f2- | sort -u)
+echo "prelik 관리 credentials 파일:"
+printf '  %s\n' $CRED_PATHS
 
-# 4) fstab에서 해당 라인 제거
-sudo nano /etc/fstab    # 또는 sed -i '/PATTERN/d'
+# 4) 마운트 목록에서 prelik 라인의 mount point 확인 후 umount
+sudo grep -E '_netdev,nofail.*credentials=/etc/cifs-credentials/' /etc/fstab | awk '{print $2}'
+# 위 출력으로 나온 각 경로에 대해:
+sudo umount /mnt/<your-prelik-mount>
 
-# 5) cifs-credentials 파일 제거 (SMB 비밀번호 평문)
-#
-#    ⚠️ 파일명 한계 — 가이드를 엄격히 따를 것:
-#    prelik nas는 "{host}_{share}"를 만들고 비영숫자를 '_'로 치환합니다.
-#    이 매핑은 비단사 (nas.local / nas-local / nas_local 모두 'nas_local'로 충돌).
-#    따라서 host/share로부터 역계산한 파일명 삭제는 잘못된 파일을 지울 수 있습니다.
-#
-#    ✅ 정확한 방법: fstab에 남아 있는 'credentials=...' 경로를 직접 읽어 삭제.
-#    (§3 단계 4에서 fstab 라인을 이미 봤으니 그 라인의 실제 경로를 씀)
+# 5) fstab에서 해당 prelik 라인만 제거 (다른 CIFS 라인은 보존)
+sudo sed -i.bak '/_netdev,nofail.*credentials=\/etc\/cifs-credentials\//d' /etc/fstab
+# /etc/fstab.bak에 원본 백업됨. 다른 관리자의 라인이 실수로 지워졌는지 diff로 확인 권장:
+diff /etc/fstab.bak /etc/fstab
 
-# 1) fstab에서 prelik이 추가한 mount 라인의 credentials= 경로 추출
-sudo grep -oE 'credentials=[^, ]+' /etc/fstab | sort -u
-# 출력 예: credentials=/etc/cifs-credentials/nas_local_data
+# 6) 3)에서 캡처한 경로만 정확히 삭제 — 다른 CIFS mount의 cred는 보존
+for p in $CRED_PATHS; do
+  sudo rm -f "$p"
+done
 
-# 2) 그 경로만 정확히 삭제 (여러 개면 각각)
-sudo rm -f /etc/cifs-credentials/nas_local_data
-
-# 3) 디렉토리가 비었을 때만 rmdir (다른 mount의 cred가 남아 있으면 보존)
+# 7) 디렉토리가 비었을 때만 rmdir (다른 CIFS mount의 cred가 남아 있으면 보존)
 sudo rmdir /etc/cifs-credentials 2>/dev/null || true
+
+# 8) fstab 변경 후 잘못된 항목 없는지 검증
+sudo mount -a
 ```
 
-fstab에서 이미 prelik mount 라인을 제거했다면 위 grep은 아무것도 반환하지 않습니다.
-이 경우 순서를 바꿔 `/etc/fstab` 편집 **전에** 위 1) 단계를 먼저 실행하세요.
+**안전 장치 요약:**
+- `_netdev,nofail` + `/etc/cifs-credentials/` 조합 필터로 prelik-specific 범위 확보
+- 캡처 → 편집 → 삭제 순서 (편집이 먼저 오면 추적 불가)
+- `sed -i.bak`로 fstab 백업 → diff로 의도하지 않은 삭제 검증
+- `mount -a`로 최종 검증
 
 **검증:**
 ```bash
