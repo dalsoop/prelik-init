@@ -98,17 +98,28 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn snapshot_path(id: &str) -> PathBuf {
-    PathBuf::from(SNAPSHOT_DIR).join(format!("{id}.json"))
+fn snapshot_path(id: &str) -> anyhow::Result<PathBuf> {
+    validate_id(id)?;
+    Ok(PathBuf::from(SNAPSHOT_DIR).join(format!("{id}.json")))
+}
+
+// id 충돌 회피: 같은 초에 여러 스냅샷 생성 시 -1, -2 suffix.
+fn unique_snapshot_id() -> anyhow::Result<String> {
+    let base = now_secs();
+    for n in 0u32..100 {
+        let id = if n == 0 { base.to_string() } else { format!("{base}-{n}") };
+        let p = PathBuf::from(SNAPSHOT_DIR).join(format!("{id}.json"));
+        if !p.exists() { return Ok(id); }
+    }
+    anyhow::bail!("같은 초에 100개+ 스냅샷 생성 — 비정상")
 }
 
 fn collect_lxc_configs(node: &str) -> anyhow::Result<HashMap<String, String>> {
     let dir = format!("/etc/pve/nodes/{node}/lxc");
+    // 디렉토리 부재/접근 불가 = 안전망 실패. 빈 맵 반환 금지 — 호출자가 fail-fast 결정.
+    let entries = fs::read_dir(&dir)
+        .map_err(|e| anyhow::anyhow!("LXC config 디렉토리 읽기 실패 {dir}: {e}"))?;
     let mut map = HashMap::new();
-    let entries = match fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(map), // Proxmox 아닌 환경에선 빈 맵
-    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("conf") { continue; }
@@ -121,14 +132,64 @@ fn collect_lxc_configs(node: &str) -> anyhow::Result<HashMap<String, String>> {
     Ok(map)
 }
 
+// 노드 이름 자동 감지: pvecm status가 우선 (정확한 PVE 노드명),
+// fallback으로 /etc/hostname.
+fn detect_node() -> anyhow::Result<String> {
+    if common::has_cmd("pvesh") {
+        let out = common::run("pvesh", &["get", "/cluster/status", "--output-format", "json"]);
+        if let Ok(text) = out {
+            if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+                if let Some(local) = arr.iter()
+                    .find(|v| v["type"].as_str() == Some("node") && v["local"].as_i64() == Some(1))
+                    .and_then(|v| v["name"].as_str())
+                {
+                    return Ok(local.to_string());
+                }
+            }
+        }
+    }
+    let h = fs::read_to_string("/etc/hostname")?.trim().to_string();
+    if h.is_empty() { anyhow::bail!("노드 이름 감지 실패 (/etc/hostname 비어 있음)"); }
+    Ok(h)
+}
+
+// id는 안전한 문자만 허용 — path traversal/외부 디렉토리 접근 차단.
+fn validate_id(id: &str) -> anyhow::Result<()> {
+    if id.is_empty() { anyhow::bail!("snapshot id가 비어 있음"); }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        anyhow::bail!("snapshot id는 [A-Za-z0-9_-]만 허용: {id:?}");
+    }
+    Ok(())
+}
+
+// snapshot 내부 LXC config filename 검증 — Path::file_name과 일치해야 traversal 차단.
+fn validate_config_filename(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() { anyhow::bail!("config filename 비어 있음"); }
+    let p = Path::new(name);
+    if p.file_name().and_then(|n| n.to_str()) != Some(name) {
+        anyhow::bail!("config filename에 경로 구성요소 포함: {name:?}");
+    }
+    if !name.ends_with(".conf") {
+        anyhow::bail!("config filename이 .conf로 끝나야 함: {name:?}");
+    }
+    Ok(())
+}
+
 fn create(action: &str, node: Option<&str>, json: bool) -> anyhow::Result<()> {
     ensure_dirs()?;
     let node = match node {
         Some(n) => n.to_string(),
-        None => fs::read_to_string("/etc/hostname")?.trim().to_string(),
+        None => detect_node()?,
     };
-    let id = now_secs().to_string();
+    let id = unique_snapshot_id()?;
     let lxc_configs = collect_lxc_configs(&node)?;
+    // 빈 스냅샷 거부 — destructive op 안전망인데 백업 없으면 의미 없음.
+    if lxc_configs.is_empty() {
+        anyhow::bail!(
+            "노드 '{node}'의 LXC config가 0개 — 안전망이 비어 있습니다. \
+             노드 이름을 --node로 명시하거나 Proxmox 환경을 확인하세요."
+        );
+    }
     let cluster_nodes = if common::has_cmd("pvecm") {
         common::run("pvecm", &["nodes"]).unwrap_or_default()
     } else {
@@ -142,7 +203,7 @@ fn create(action: &str, node: Option<&str>, json: bool) -> anyhow::Result<()> {
         lxc_configs,
         cluster_nodes,
     };
-    fs::write(snapshot_path(&id), serde_json::to_string_pretty(&snap)?)?;
+    fs::write(snapshot_path(&id)?, serde_json::to_string_pretty(&snap)?)?;
     audit_log_internal(&format!("snapshot-create id={id} action={action}"))?;
 
     if json {
@@ -196,7 +257,7 @@ fn list(json: bool) -> anyhow::Result<()> {
 }
 
 fn restore(id: &str, force: bool) -> anyhow::Result<()> {
-    let path = snapshot_path(id);
+    let path = snapshot_path(id)?;
     if !path.exists() {
         anyhow::bail!("스냅샷 {id} 없음");
     }
@@ -210,13 +271,24 @@ fn restore(id: &str, force: bool) -> anyhow::Result<()> {
     }
     let node = snap.node.as_deref()
         .ok_or_else(|| anyhow::anyhow!("스냅샷에 노드 이름 없음 — restore 불가"))?;
-    let target_dir = format!("/etc/pve/nodes/{node}/lxc");
-    if !Path::new(&target_dir).exists() {
-        anyhow::bail!("대상 디렉토리 없음 (Proxmox 아닌 환경?): {target_dir}");
+    // 노드 이름도 검증 (snapshot이 조작됐을 경우 대비)
+    if !node.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        anyhow::bail!("스냅샷의 node 이름이 비정상: {node:?}");
+    }
+    let target_dir = PathBuf::from(format!("/etc/pve/nodes/{node}/lxc"));
+    if !target_dir.exists() {
+        anyhow::bail!("대상 디렉토리 없음 (Proxmox 아닌 환경?): {}", target_dir.display());
     }
     let mut restored = 0;
     for (name, content) in &snap.lxc_configs {
-        let p = Path::new(&target_dir).join(name);
+        // 각 filename 검증 — 경로 구성요소 차단 (../등)
+        validate_config_filename(name)?;
+        let p = target_dir.join(name);
+        // canonical 검증: 결과 경로가 target_dir 하위인지 확인
+        let parent = p.parent().unwrap_or(&target_dir);
+        if parent != target_dir {
+            anyhow::bail!("복원 경로가 대상 디렉토리 밖: {}", p.display());
+        }
         fs::write(&p, content)?;
         restored += 1;
     }
@@ -226,7 +298,7 @@ fn restore(id: &str, force: bool) -> anyhow::Result<()> {
 }
 
 fn delete(id: &str) -> anyhow::Result<()> {
-    let path = snapshot_path(id);
+    let path = snapshot_path(id)?;
     if !path.exists() {
         anyhow::bail!("스냅샷 {id} 없음");
     }
@@ -300,8 +372,39 @@ mod tests {
 
     #[test]
     fn snapshot_path_basic() {
-        let p = snapshot_path("12345");
+        let p = snapshot_path("12345").unwrap();
         assert_eq!(p, PathBuf::from("/var/lib/prelik/snapshots/12345.json"));
+    }
+
+    #[test]
+    fn snapshot_path_id_traversal_rejected() {
+        assert!(snapshot_path("../etc/passwd").is_err());
+        assert!(snapshot_path("foo/bar").is_err());
+        assert!(snapshot_path("foo bar").is_err());
+        assert!(snapshot_path("").is_err());
+        assert!(snapshot_path(".").is_err()); // '.' alone — 영숫자 아님
+    }
+
+    #[test]
+    fn snapshot_path_id_allowed() {
+        assert!(snapshot_path("1700000000").is_ok());
+        assert!(snapshot_path("1700000000-1").is_ok());
+        assert!(snapshot_path("snap_v2").is_ok());
+        assert!(snapshot_path("ABC-123_xyz").is_ok());
+    }
+
+    #[test]
+    fn config_filename_traversal_rejected() {
+        assert!(validate_config_filename("../passwd").is_err());
+        assert!(validate_config_filename("foo/bar.conf").is_err());
+        assert!(validate_config_filename("noext").is_err());
+        assert!(validate_config_filename("").is_err());
+    }
+
+    #[test]
+    fn config_filename_allowed() {
+        assert!(validate_config_filename("100.conf").is_ok());
+        assert!(validate_config_filename("abc-test.conf").is_ok());
     }
 
     #[test]
