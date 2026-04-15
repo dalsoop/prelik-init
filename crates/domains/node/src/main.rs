@@ -154,6 +154,19 @@ fn info(node: &str, json: bool) -> anyhow::Result<()> {
 
 // ---------- exec ----------
 
+fn cluster_node_ip(node: &str) -> anyhow::Result<String> {
+    let raw = common::run("pvesh", &["get", "/cluster/status", "--output-format", "json"])?;
+    let arr: Vec<serde_json::Value> = serde_json::from_str(&raw)
+        .map_err(|e| anyhow::anyhow!("pvesh /cluster/status JSON 파싱 실패: {e}"))?;
+    arr.iter()
+        .find(|v| v["type"].as_str() == Some("node") && v["name"].as_str() == Some(node))
+        .and_then(|v| v["ip"].as_str().map(String::from))
+        .ok_or_else(|| anyhow::anyhow!(
+            "노드 '{node}'는 클러스터 멤버가 아니거나 IP 없음 (prelik-node list 로 확인). \
+             임의 호스트 SSH는 차단됩니다."
+        ))
+}
+
 fn exec(node: &str, cmd: &[String]) -> anyhow::Result<()> {
     if !common::has_cmd("ssh") {
         anyhow::bail!("ssh 없음");
@@ -164,25 +177,20 @@ fn exec(node: &str, cmd: &[String]) -> anyhow::Result<()> {
     if cmd.is_empty() {
         anyhow::bail!("실행 명령이 비어 있음");
     }
-    // 권한 경계: 실제 Proxmox 클러스터 멤버만 허용. 임의 호스트 SSH 프리미티브로 변질 금지.
-    let nodes_json = common::run("pvesh", &["get", "/nodes", "--output-format", "json"])?;
-    let rows = parse_pvesh_nodes(&nodes_json)?;
-    if !rows.iter().any(|r| r.node == node) {
-        anyhow::bail!(
-            "노드 '{node}'는 클러스터 멤버가 아님 (prelik-node list 로 확인). \
-             임의 호스트 SSH는 차단됩니다."
-        );
-    }
-
-    let target = format!("root@{node}");
+    // 클러스터가 보고한 canonical IP로 직접 접속.
+    // 노드 이름만 ssh에 넘기면 ~/.ssh/config의 Host alias가 HostName/ProxyCommand
+    // 등으로 우회 가능 — IP 직바인딩 + -F /dev/null로 user config 무시.
+    let ip = cluster_node_ip(node)?;
+    let target = format!("root@{ip}");
     let joined = cmd.join(" ");
-    // StrictHostKeyChecking=yes — 첫 연결 자동 신뢰 금지.
-    // 사전에 known_hosts에 등록되어 있어야 함 (Proxmox 클러스터는 보통 가입 시 등록됨).
     let status = Command::new("ssh")
         .args([
+            "-F", "/dev/null", // user/system ssh_config 무시
             "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=yes",
             "-o", "BatchMode=yes",
+            "-o", "ProxyCommand=none",
+            "-o", "ProxyJump=none",
             &target, &joined,
         ])
         .status()?;
