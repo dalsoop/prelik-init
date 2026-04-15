@@ -30,14 +30,6 @@ in
       requires = ["bootstrap"],
       provides = ["connect add", "connect remove", "connect list"],
     } | Domain,
-
-    manager = {
-      name = "manager",
-      description = "도메인 설치/업데이트 매니저 (prelik CLI 내부)",
-      tags = { product = 'init, layer = 'platform, platform = 'any },
-      provides = ["install", "remove", "update", "list"],
-    } | Domain,
-
     lxc = {
       name = "lxc",
       description = "LXC 수명 관리 (Proxmox pct 래퍼)",

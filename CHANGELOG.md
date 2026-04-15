@@ -2,6 +2,20 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.8.1] - 2026-04-15
+
+### Fixed / Stability
+- **`manager` placeholder 완전 제거**: 실행해도 "TODO: 구현 예정"만 출력해서
+  공유 시 혼란 유발. crate, domain.ncl, registry fallback, release.yml 전부 정리.
+- **install flock 배타 락**: `/var/lib/prelik/.install.lock` 기반 논블로킹
+  flock(LOCK_EX|LOCK_NB). 같은 도메인을 병행 설치해서 바이너리가 덮어써지는
+  race condition 차단.
+- **tar 실패 시 부분 설치 정리**: 압축 해제 도중 실패하면 domain 디렉토리
+  전체 삭제. 잔재 없음.
+
+### Removed
+- `prelik-manager` 바이너리 (공식 리스트에서 제거)
+
 ## [0.8.0] - 2026-04-15
 
 ### Added

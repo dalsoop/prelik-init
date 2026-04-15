@@ -238,6 +238,23 @@ fn install_many(mut domains: Vec<String>, preset: Option<&str>) -> anyhow::Resul
         anyhow::bail!("설치할 도메인 없음. 예: prelik install bootstrap lxc --preset mail");
     }
 
+    // 동시 install 차단 — flock으로 프로세스 간 배타.
+    // 같은 도메인을 병행 설치 시 한쪽이 쓴 파일을 다른 쪽이 덮어쓰는 경쟁 방지.
+    let lock_path = paths::data_dir()?.join(".install.lock");
+    std::fs::create_dir_all(lock_path.parent().unwrap())?;
+    let _lock_file = std::fs::OpenOptions::new()
+        .create(true).write(true).truncate(false)
+        .open(&lock_path)?;
+    use std::os::unix::io::AsRawFd;
+    let fd = _lock_file.as_raw_fd();
+    unsafe {
+        extern "C" { fn flock(fd: i32, op: i32) -> i32; }
+        // LOCK_EX | LOCK_NB = 2 | 4 — 논블로킹 배타
+        if flock(fd, 2 | 4) != 0 {
+            anyhow::bail!("다른 install이 진행 중입니다 ({}). 완료 후 재시도하세요.", lock_path.display());
+        }
+    }
+
     let total = domains.len();
     let mut failed = vec![];
     for (i, d) in domains.iter().enumerate() {
@@ -281,7 +298,7 @@ fn install(domain: &str) -> anyhow::Result<()> {
 
     let dom_dir = paths::domains_dir()?.join(domain);
     std::fs::create_dir_all(&dom_dir)?;
-    common::run(
+    let tar_result = common::run(
         "tar",
         &[
             "-xzf",
@@ -289,9 +306,14 @@ fn install(domain: &str) -> anyhow::Result<()> {
             "-C",
             &dom_dir.display().to_string(),
         ],
-    )?;
-    // tarball 파일 정리
+    );
+    // tarball 파일은 성공/실패 관계없이 정리
     let _ = std::fs::remove_file(&dest_tar);
+    if let Err(e) = tar_result {
+        // 부분 추출된 상태면 dom_dir 전체 삭제 (부분 설치 방지)
+        let _ = std::fs::remove_dir_all(&dom_dir);
+        return Err(anyhow::anyhow!("tar 추출 실패: {e}"));
+    }
 
     // 기대 바이너리 검증
     let bin_name = format!("prelik-{domain}");
