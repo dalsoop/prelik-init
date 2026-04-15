@@ -217,8 +217,10 @@ fn self_update(version: Option<&str>, force: bool) -> anyhow::Result<()> {
     if !common::has_cmd("bash") {
         anyhow::bail!("bash 없음");
     }
+    // pipefail 필수 — `false | bash`는 0을 반환하므로 curl 실패가 묻힘.
+    // -e도 같이 켜서 set -o 변경 자체 실패도 잡음.
     let mut cmd = std::process::Command::new("bash");
-    cmd.arg("-c").arg("curl -fsSL https://install.prelik.com | bash");
+    cmd.arg("-c").arg("set -eo pipefail; curl -fsSL https://install.prelik.com | bash");
     if let Some(v) = version {
         cmd.env("PRELIK_VERSION", v);
         println!("  PRELIK_VERSION={v}");
