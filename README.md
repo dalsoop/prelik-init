@@ -1,11 +1,12 @@
 # prelik-init
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/dalsoop/prelik-init/releases/tag/v1.0.0)
-[![Codex Reviews](https://img.shields.io/badge/codex--reviewed-14x-green)]()
+[![Version](https://img.shields.io/badge/version-1.5.2-blue)](https://github.com/dalsoop/prelik-init/releases/tag/v1.5.2)
+[![Codex Reviews](https://img.shields.io/badge/codex--reviewed-26x-green)]()
+[![Domains](https://img.shields.io/badge/domains-18-blueviolet)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
 > Proxmox/LXC/Debian 서버용 **도메인 기반 설치형 CLI**.
-> 하나의 바이너리가 아닌, 각 도메인이 독립 바이너리로 배포됩니다.
+> 하나의 거대 바이너리가 아닌, 18개 도메인이 독립 바이너리로 배포됩니다.
 
 ```bash
 curl -fsSL https://install.prelik.com | bash
@@ -16,103 +17,117 @@ prelik init
 
 ## 왜?
 
-기존 "인프라 관리 CLI"들은 하나의 거대 바이너리에 모든 기능을 우겨넣어:
-- 바이너리 크기 증가
-- 빌드 시간 지연
-- 쓰지도 않는 기능 같이 설치됨
-- 버그 하나가 전체에 영향
+기존 "인프라 관리 CLI"들은 모든 기능을 한 바이너리에 우겨넣어:
+- 바이너리 크기 / 빌드 시간 증가
+- 안 쓰는 기능까지 같이 설치
+- 한 도메인의 버그가 전체에 영향
 
-**prelik-init은 도메인별 독립 바이너리**로 설계되었습니다:
-- `prelik-lxc`: LXC 수명관리
-- `prelik-traefik`: 리버스 프록시
-- `prelik-mail`: 메일 스택
-- `prelik-cloudflare`: CF DNS/Worker
-- `prelik-connect`: 시크릿 관리
-- `prelik-ai`: Claude/Codex 플러그인
-
-필요한 것만 설치, 업데이트, 제거할 수 있습니다.
+**prelik-init은 도메인별 독립 바이너리**:
+- 필요한 것만 설치/제거/업데이트
+- 도메인마다 자체 `doctor` (의존성 점검)
+- Nickel (`ncl/domains.ncl`)이 SSOT — CLI는 자동 감지
 
 ---
 
 ## 빠른 시작
 
 ### 1. 설치
-
 ```bash
 curl -fsSL https://install.prelik.com | bash
 ```
 
 ### 2. 초기 세팅
-
 ```bash
-prelik init   # 인터랙티브 — CF/SMTP/Network 입력
+prelik init        # 인터랙티브 — CF/SMTP/Network 입력
+prelik available   # 가능한 도메인 18개
+prelik doctor      # 환경 점검
 ```
 
-### 3. 도메인 설치
-
+### 3. 프리셋 또는 개별 설치
 ```bash
-prelik available                     # 가능한 것들 보기
-prelik install --preset web          # 프리셋으로 한 번에 (bootstrap + lxc + traefik + cloudflare)
-prelik install --preset mail         # 메일 스택
+prelik install --preset web          # bootstrap + lxc + traefik + cloudflare
+prelik install --preset mail         # bootstrap + lxc + mail + cloudflare + connect
 prelik install bootstrap lxc traefik # 공백으로 여러 개
 ```
 
-프리셋:
-- `web` — 웹 호스팅 기본 (bootstrap, lxc, traefik, cloudflare)
-- `mail` — 메일 스택 (bootstrap, lxc, mail, cloudflare, connect)
-- `dev` — 개발 도구 (bootstrap, ai, connect)
-- `minimal` — 필수 최소 (bootstrap)
+프리셋: `web` / `mail` / `dev` / `minimal`
 
 ### 4. 사용
-
 ```bash
 prelik run lxc create --vmid 200 --hostname myapp --ip 10.0.50.200
-prelik run traefik recreate --vmid 100
+prelik run iso download debian-13.iso --url https://... --storage local
 prelik run cloudflare dns-add --domain example.com --type A --name myapp --content 1.2.3.4 --audience kr
-prelik run mail install-mailpit --vmid 124
-prelik run ai codex-plugin-install --fork
-prelik doctor
-```
-
-### 도구 단위 설치/제거 (bootstrap)
-
-```bash
-prelik run bootstrap list              # 각 도구 상태
-prelik run bootstrap install           # 전부 설치
-prelik run bootstrap install --only nickel,rust    # 선택 설치
-prelik run bootstrap remove  --only nickel         # 선택 제거
+prelik run monitor all
+prelik run deploy service --recipe nginx.toml
 ```
 
 ---
 
-## 도메인
+## 도메인 카탈로그 (18개)
 
+### 🏗 platform — 기본 인프라
 | 도메인 | 기능 | 주요 커맨드 |
 |--------|------|------------|
-| **account** | 리눅스 계정 관리 | `create`, `remove`, `ssh-key-add` |
-| **ai** | Claude/Codex CLI + 플러그인 | `install`, `octopus`, `superpowers`, `codex-plugin` |
-| **bootstrap** | 의존성 (apt/rust/gh/dotenvx/nickel) | `install --only`, `remove`, `doctor` |
-| **cloudflare** | DNS CRUD + Email Worker | `dns-add/list/update/delete`, `email-worker-attach-all --dry-run` |
-| **comfyui** | GPU LXC + ComfyUI 설치 | `install`, `gpu-passthrough`, `status` |
-| **connect** | .env + dotenvx 암호화 | `set`, `list`, `encrypt` |
+| **bootstrap** | 의존성 (apt/rust/gh/dotenvx/nickel) | `install [--only X]`, `remove`, `list`, `doctor` |
 | **host** | 호스트 시스템 관리 | `status`, `monitor`, `ssh-keygen`, `smb-open/close` |
-| **lxc** | Proxmox LXC 수명관리 | `list`, `create`, `delete`, `backup`, `enter` |
+| **account** | 리눅스 계정 관리 | `create`, `remove`, `list`, `ssh-key-add` |
+| **nas** | SMB/NFS 마운트 (cifs-credentials 분리) | `mount`, `unmount`, `list` |
+| **workspace** | tmux + shell alias | `tmux-setup`, `shell-setup`, `status` |
+
+### 🖧 proxmox — 가상화 인프라
+| 도메인 | 기능 | 주요 커맨드 |
+|--------|------|------------|
+| **lxc** | LXC 수명관리 (pct 래퍼) | `create`, `delete`, `enter`, `snapshot-*`, `resize` |
+| **vm** | QEMU VM 수명관리 (qm 래퍼) | `start/stop/reboot`, `backup`, `resize` |
+| **backup** | vzdump 기반 백업 + 스케줄 | `now`, `list`, `schedule-add`, `restore` |
+| **iso** | ISO 스토리지 + 파일 관리 | `list`, `storage-add-nfs/cifs`, `download`, `remove` |
+| **deploy** | TOML 레시피 → LXC 자동 배포 | `service`, `list-recipes` |
+| **monitor** | 호스트/LXC/VM 리소스 (read-only) | `host`, `lxc`, `vm`, `all` |
+
+### 🌐 network — 네트워크/외부 연동
+| 도메인 | 기능 | 주요 커맨드 |
+|--------|------|------------|
+| **traefik** | Traefik 리버스 프록시 | `recreate`, `route-add`, `route-list` |
+| **cloudflare** | DNS CRUD + Email Worker + Pages + SSL | `dns-add/list/update/delete`, `pages-deploy`, `ssl-issue` |
 | **mail** | Maddy + Mailpit + Postfix relay | `install-mailpit`, `postfix-relay` |
-| **nas** | SMB/NFS 마운트 | `mount --protocol smb|nfs`, `unmount`, `list` |
-| **telegram** | 봇 관리 + 발송 | `register`, `send`, `verify` |
-| **traefik** | 리버스 프록시 | `recreate`, `route-add`, `route-list` |
-| **workspace** | tmux + shell alias | `tmux-setup`, `shell-setup` |
+| **connect** | .env + dotenvx 암호화 | `set`, `list`, `encrypt` |
+| **telegram** | 봇 관리 + 발송 | `register`, `send`, `verify`, `remove` |
+
+### 🤖 ai — AI/특수 워크로드
+| 도메인 | 기능 | 주요 커맨드 |
+|--------|------|------------|
+| **ai** | Claude/Codex CLI + 플러그인 | `install`, `octopus-install`, `superpowers-install`, `codex-plugin-install` |
+| **comfyui** | GPU LXC + ComfyUI 자동 설치 | `install`, `gpu-passthrough`, `status` |
+
+각 도메인 사용법:
+```bash
+prelik run <domain> --help
+prelik run <domain> doctor       # 의존성 점검 (모두 graceful exit 0)
+```
+
+---
+
+## 안정성
+
+- **26차 Codex 어드버서리얼 리뷰** 통과 (P0/P1 35건+ 수정)
+- 전 도메인 `doctor` graceful (CI smoke 호환)
+- `common::run_secret()` — `--password` 등 비밀 argv를 anyhow 체인에서 마스킹
+- `common::has_cmd()` — 외부 `which` 바이너리 의존 없음
+- SMB credentials는 `/etc/cifs-credentials/` 분리 (0600 root:root)
+- fstab은 `tee -a` append-only + EOF 개행 검증
+- postfix relay는 `/etc/postfix/prelik-backup-<ns-ts>/` 백업 + 자동 롤백
 
 ---
 
 ## 실전 예시
 
-- [examples/formbricks.md](examples/formbricks.md) — Formbricks 설문조사 + Traefik + CF
+- [examples/formbricks.md](examples/formbricks.md) — Formbricks + Traefik + CF
+- [examples/recipes/nginx.toml](examples/recipes/nginx.toml) — deploy 레시피
 
-## phs (내부 도구)와 비교
+## phs와 비교
 
-prelik-init은 dalsoop의 내부 도구 phs의 ~25%를 추출한 서브셋입니다.
-정확한 동작 차이와 누락 기능: [docs/phs-vs-prelik.md](docs/phs-vs-prelik.md)
+prelik-init은 dalsoop의 내부 도구 phs를 일반화·도려낸 OSS 서브셋입니다.
+[docs/phs-vs-prelik.md](docs/phs-vs-prelik.md)
 
 ---
 
@@ -120,11 +135,11 @@ prelik-init은 dalsoop의 내부 도구 phs의 ~25%를 추출한 서브셋입니
 
 | 원칙 | 구체 |
 |------|------|
-| **도메인 = 독립 바이너리** | 각 도메인이 자기 책임 완결, 의존성 최소화 |
-| **Nickel SSOT** | `ncl/domains.ncl` 가 레지스트리, 런타임에 export |
-| **Install 채널** | `install.prelik.com` → GitHub Release 리다이렉트 |
-| **권한 모델** | user 기본, root일 때만 `/etc/prelik` 사용 |
-| **Secret** | dotenvx `.env.vault` (키 파일 분리) |
+| **도메인 = 독립 바이너리** | 자기 책임 완결, 최소 의존성 |
+| **Nickel SSOT** | `ncl/domains.ncl`이 레지스트리, 런타임 export |
+| **Doctor 일관성** | 누락 의존성은 보고만, 종료 코드 0 (CI 친화) |
+| **Secret 마스킹** | 비밀 argv는 `run_secret`으로 anyhow에 미노출 |
+| **Install 채널** | `install.prelik.com` → GitHub Release 리다이렉트 (CF Worker) |
 
 ---
 
@@ -133,43 +148,52 @@ prelik-init은 dalsoop의 내부 도구 phs의 ~25%를 추출한 서브셋입니
 ```
 prelik-init/
 ├── crates/
-│   ├── core/         # 공통: os, paths, dotenvx, github, systemd, registry
-│   ├── cli/          # `prelik` 진입점
-│   └── domains/      # 독립 바이너리 × 8
+│   ├── core/         # 공통: paths, config, common(run/run_secret/has_cmd), registry
+│   ├── cli/          # `prelik` 진입점 (도메인 자동 감지)
+│   └── domains/      # 독립 바이너리 × 18
 ├── ncl/              # Nickel 레지스트리 (SSOT)
 ├── workers/          # Cloudflare Worker (install.prelik.com)
-├── examples/         # 실전 사용 예시
+├── examples/         # 실전 사용 예시 + recipes
+├── tests/smoke.sh    # 전 도메인 --help/doctor smoke
 └── install.sh
 ```
 
 ---
 
-## 릴리스
+## 릴리스 (v1.x)
 
 | 버전 | 주요 변경 |
 |------|----------|
-| [v0.5.0](https://github.com/dalsoop/prelik-init/releases/tag/v0.5.0) | Codex 보안 리뷰 6개 이슈 수정 |
-| [v0.4.0](https://github.com/dalsoop/prelik-init/releases/tag/v0.4.0) | ai 도메인 + install.prelik.com |
-| [v0.3.0](https://github.com/dalsoop/prelik-init/releases/tag/v0.3.0) | traefik, mail, cloudflare, connect |
-| [v0.2.0](https://github.com/dalsoop/prelik-init/releases/tag/v0.2.0) | lxc + Nickel runtime |
-| [v0.1.0](https://github.com/dalsoop/prelik-init/releases/tag/v0.1.0) | 초기 스캐폴딩 |
+| [v1.5.2](https://github.com/dalsoop/prelik-init/releases/tag/v1.5.2) | 안정성 스윕 — `run_secret`/`has_cmd` 통합 |
+| [v1.5.1](https://github.com/dalsoop/prelik-init/releases/tag/v1.5.1) | monitor/iso 외부 `which` 바이너리 의존 제거 |
+| [v1.5.0](https://github.com/dalsoop/prelik-init/releases/tag/v1.5.0) | **monitor** 도메인 (호스트/LXC/VM read-only) |
+| [v1.4.1](https://github.com/dalsoop/prelik-init/releases/tag/v1.4.1) | iso SMB 비밀번호 로그 노출 차단 |
+| [v1.4.0](https://github.com/dalsoop/prelik-init/releases/tag/v1.4.0) | **iso** 도메인 (Proxmox ISO 스토리지/파일) |
+| [v1.3.1](https://github.com/dalsoop/prelik-init/releases/tag/v1.3.1) | deploy의 IP /16 강제 회귀 수정 |
+| [v1.3.0](https://github.com/dalsoop/prelik-init/releases/tag/v1.3.0) | **deploy** 도메인 (TOML 레시피) |
+| [v1.2.0](https://github.com/dalsoop/prelik-init/releases/tag/v1.2.0) | **backup** + lxc snapshot/resize |
+| [v1.1.0](https://github.com/dalsoop/prelik-init/releases/tag/v1.1.0) | **vm** 도메인 |
+| [v1.0.0](https://github.com/dalsoop/prelik-init/releases/tag/v1.0.0) | Phase 2 안정화 + install.prelik.com |
+
+전체 변경 이력: [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
 ## 기여
 
-1. 새 도메인은 `crates/domains/<name>/` 디렉토리로 추가
-2. `domain.ncl` 마커 파일 필수 (build.rs가 감지)
-3. `ncl/domains.ncl` 레지스트리에 메타데이터 추가
-4. `crates/cli/src/main.rs`는 수정 불필요 — 도메인 자동 감지
+1. 새 도메인은 `crates/domains/<name>/` 추가 + `Cargo.toml` 작성
+2. `ncl/domains.ncl` 레지스트리에 메타데이터
+3. `crates/core/src/registry.rs` fallback에 한 줄
+4. `tests/smoke.sh` + `.github/workflows/release.yml`에 도메인명 추가
+5. CLI는 자동 감지 — 수정 불필요
 
-[CONTRIBUTING.md](CONTRIBUTING.md) 참조.
+[CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 
 ## 라이선스
 
-MIT License
+MIT
 
 ## 관련 프로젝트
 
