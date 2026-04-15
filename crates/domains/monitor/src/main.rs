@@ -222,9 +222,11 @@ fn collect_lxc(running_only: bool) -> anyhow::Result<Vec<LxcRow>> {
 
 fn lxc(running_only: bool, json: bool) -> anyhow::Result<()> {
     if !common::has_cmd("pct") {
-        // "지원 안 됨"을 빈 결과로 위장하지 않음 — 자동화가 false negative를 내지 않도록.
-        if !json { eprintln!("(pct 미설치 — Proxmox 호스트 아님)"); }
-        anyhow::bail!("pct unavailable");
+        // 텍스트는 기존 soft-fail 계약 유지 (안내 후 Ok),
+        // JSON만 fail-fast (자동화 false negative 차단).
+        if json { anyhow::bail!("pct unavailable"); }
+        println!("(pct 미설치 — Proxmox 호스트 아님)");
+        return Ok(());
     }
     let rows = collect_lxc(running_only)?;
     if json { println!("{}", serde_json::to_string_pretty(&rows)?); return Ok(()); }
@@ -281,8 +283,9 @@ fn collect_vm(running_only: bool) -> anyhow::Result<Vec<VmRow>> {
 
 fn vm(running_only: bool, json: bool) -> anyhow::Result<()> {
     if !common::has_cmd("qm") {
-        if !json { eprintln!("(qm 미설치 — Proxmox 호스트 아님)"); }
-        anyhow::bail!("qm unavailable");
+        if json { anyhow::bail!("qm unavailable"); }
+        println!("(qm 미설치 — Proxmox 호스트 아님)");
+        return Ok(());
     }
     let rows = collect_vm(running_only)?;
     if json { println!("{}", serde_json::to_string_pretty(&rows)?); return Ok(()); }
