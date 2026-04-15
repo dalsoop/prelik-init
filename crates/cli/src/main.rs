@@ -43,6 +43,16 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// prelik 자체 제거 (반드시 docs/uninstall.md 먼저 읽을 것 — 많은 시스템 변경을 남김)
+    Uninstall {
+        /// 실제로 제거. 생략하면 dry-run만 실행.
+        #[arg(long)]
+        confirm: bool,
+        /// config/recovery/audit 디렉토리까지 삭제 (~/.config/prelik, /etc/prelik, /var/lib/prelik).
+        /// .env.vault 같은 암호화된 시크릿 포함 — 복구 불가.
+        #[arg(long)]
+        purge: bool,
+    },
     /// 상태 점검
     Doctor,
 }
@@ -64,6 +74,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::Run { domain, args } => run_domain(&domain, &args),
+        Cmd::Uninstall { confirm, purge } => uninstall(confirm, purge),
         Cmd::Doctor => {
             doctor();
             Ok(())
@@ -436,4 +447,97 @@ fn detect_target() -> anyhow::Result<String> {
         "aarch64" | "arm64" => Ok("aarch64-linux".into()),
         other => anyhow::bail!("지원하지 않는 아키텍처: {other}"),
     }
+}
+
+// ========== uninstall ==========
+
+fn uninstall(confirm: bool, purge: bool) -> anyhow::Result<()> {
+    println!("=== prelik uninstall ===");
+    if !confirm {
+        println!("(dry-run — 실제 삭제하려면 --confirm)\n");
+    }
+
+    // 제거 대상 수집 (실제 파일 시스템 점검 후만 보고).
+    let mut bin_dirs: Vec<PathBuf> = vec![PathBuf::from("/usr/local/bin")];
+    if let Ok(home) = std::env::var("HOME") {
+        bin_dirs.push(PathBuf::from(home).join(".local/bin"));
+    }
+    let mut bin_targets: Vec<PathBuf> = Vec::new();
+    for dir in &bin_dirs {
+        // prelik 본체 + .prelik.version 마커
+        let main_bin = dir.join("prelik");
+        if main_bin.exists() { bin_targets.push(main_bin); }
+        let marker = dir.join(".prelik.version");
+        if marker.exists() { bin_targets.push(marker); }
+        // prelik-* 도메인 바이너리
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for e in entries.flatten() {
+                if let Some(name) = e.file_name().to_str() {
+                    if name.starts_with("prelik-") {
+                        bin_targets.push(e.path());
+                    }
+                }
+            }
+        }
+    }
+    bin_targets.sort();
+    bin_targets.dedup();
+
+    let mut purge_dirs: Vec<PathBuf> = Vec::new();
+    if purge {
+        // 도메인별 sub-binary cache + 사용자/시스템 config + recovery snapshots
+        if let Ok(d) = paths::domains_dir() { if d.exists() { purge_dirs.push(d); } }
+        if let Ok(d) = paths::config_dir()  { if d.exists() { purge_dirs.push(d); } }
+        for p in ["/etc/prelik", "/var/lib/prelik"] {
+            let p = PathBuf::from(p);
+            if p.exists() { purge_dirs.push(p); }
+        }
+    }
+
+    println!("[삭제 대상] 바이너리 ({}개):", bin_targets.len());
+    for p in &bin_targets { println!("  - {}", p.display()); }
+    if purge {
+        println!("\n[--purge] 디렉토리 ({}개):", purge_dirs.len());
+        for p in &purge_dirs { println!("  - {}", p.display()); }
+    } else {
+        println!("\n[참고] config/recovery 디렉토리는 보존됩니다 (--purge로 함께 삭제 가능).");
+    }
+
+    println!("\n[건드리지 않는 것]");
+    println!("  - LXC/VM 자체 (pct/qm 리소스 — 데이터 유실 방지)");
+    println!("  - /etc/fstab의 nas 마운트 항목, /etc/cifs-credentials/*");
+    println!("  - postfix relay 백업 (/etc/postfix/prelik-backup-*/), sasl_passwd, sender_canonical");
+    println!("  - traefik 컨테이너 / 라우트 / TLS 인증서");
+    println!("  - cloudflare DNS 레코드 / Worker / Pages");
+    println!("  - dotenvx로 암호화된 .env.vault (purge에도 별도 위치면 보존)");
+    println!("  - systemd timers/services (cluster-files-sync.timer 등)");
+    println!("\n수동 정리 절차: docs/uninstall.md 참조.\n");
+
+    if !confirm {
+        println!("실제 삭제하려면: prelik uninstall --confirm{}",
+            if purge { " --purge" } else { "" });
+        return Ok(());
+    }
+
+    let mut failed = 0u32;
+    for p in &bin_targets {
+        match std::fs::remove_file(p) {
+            Ok(_) => println!("  ✓ {}", p.display()),
+            Err(e) => { eprintln!("  ✗ {} ({e})", p.display()); failed += 1; }
+        }
+    }
+    if purge {
+        for p in &purge_dirs {
+            match std::fs::remove_dir_all(p) {
+                Ok(_) => println!("  ✓ {} (purged)", p.display()),
+                Err(e) => { eprintln!("  ✗ {} ({e})", p.display()); failed += 1; }
+            }
+        }
+    }
+
+    if failed > 0 {
+        anyhow::bail!("{failed}개 항목 제거 실패. 권한(sudo) 또는 잠금 상태 확인.");
+    }
+    println!("\n✓ 완료. 외부 시스템(LXC/postfix/CF 등) 정리는 docs/uninstall.md 참조.");
+    Ok(())
 }

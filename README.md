@@ -124,6 +124,17 @@ prelik run <domain> doctor       # 의존성 점검 (모두 graceful exit 0)
 - [examples/formbricks.md](examples/formbricks.md) — Formbricks + Traefik + CF
 - [examples/recipes/nginx.toml](examples/recipes/nginx.toml) — deploy 레시피
 
+## 제거
+
+```bash
+prelik uninstall              # dry-run (어떤 파일이 지워지는지 미리 확인)
+prelik uninstall --confirm    # 바이너리만 제거
+prelik uninstall --confirm --purge   # config/recovery/audit까지 삭제
+```
+
+⚠️ **prelik이 만든 LXC/VM, NAS 마운트, postfix relay, Cloudflare DNS 등은 자동으로 안 지웁니다.**
+완전 청소 절차: [docs/uninstall.md](docs/uninstall.md)
+
 ## phs와 비교
 
 prelik-init은 dalsoop의 내부 도구 phs를 일반화·도려낸 OSS 서브셋입니다.
