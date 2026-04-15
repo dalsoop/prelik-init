@@ -58,6 +58,15 @@ in
       provides = ["telegram register", "telegram send", "telegram list", "telegram remove", "telegram verify"],
     } | Domain,
 
+    comfyui = {
+      name = "comfyui",
+      description = "ComfyUI LXC 설치 (GPU 패스스루 + systemd)",
+      tags = { product = 'ai, layer = 'remote, platform = 'proxmox },
+      requires = ["lxc"],
+      provides = ["comfyui install", "comfyui gpu-passthrough", "comfyui status"],
+    } | Domain,
+
+
 
 
 

@@ -2,6 +2,23 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.13.2] - 2026-04-15
+
+### Added (Phase 2 완료 — 3/3)
+- **prelik-comfyui**: ComfyUI LXC 설치 관리 (GPU 패스스루 + systemd)
+  - gpu-passthrough: /etc/pve/lxc/<vmid>.conf에 NVIDIA device 줄 추가 (멱등)
+  - install: git clone + venv + requirements + systemd unit
+  - status: systemctl + 포트 확인
+
+### Phase 2 전체 완료
+- [x] account (v0.13.0) — 범용 리눅스 계정 관리
+- [x] telegram (v0.13.1) — 봇 등록/발송 (범용화)
+- [x] comfyui (v0.13.2) — GPU LXC + ComfyUI 설치
+
+### 총 도메인 13개
+ai, account, bootstrap, cloudflare, comfyui, connect, host, lxc, mail, nas,
+telegram, traefik, workspace
+
 ## [0.12.1] - 2026-04-15
 
 ### Fixed (Codex 10차 리뷰 — P1 3건)
