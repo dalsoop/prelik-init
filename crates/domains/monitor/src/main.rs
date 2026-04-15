@@ -238,36 +238,28 @@ fn lxc(running_only: bool, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn lxc_mem_pct(vmid: &str) -> String {
-    let out = Command::new("pct").args(["exec", vmid, "--", "cat", "/proc/meminfo"]).output();
-    let Ok(out) = out else { return "?".into() };
-    if !out.status.success() { return "?".into(); }
-    let text = String::from_utf8_lossy(&out.stdout);
+// 순수 파서 — /proc/meminfo 텍스트에서 used% 계산. 0 또는 데이터 결손 시 None.
+fn parse_meminfo_used_pct(text: &str) -> Option<u64> {
     let mut t = 0u64; let mut a = 0u64;
     for line in text.lines() {
         if line.starts_with("MemTotal:") { t = parse_kb(line); }
         else if line.starts_with("MemAvailable:") { a = parse_kb(line); }
     }
-    if t == 0 { return "?".into(); }
-    format!("{}%", (t - a) * 100 / t)
+    if t == 0 { return None; }
+    Some((t.saturating_sub(a)) * 100 / t)
 }
 
-fn lxc_disk_pct(vmid: &str) -> String {
-    let out = Command::new("pct").args(["exec", vmid, "--", "df", "-P", "/"]).output();
-    let Ok(out) = out else { return "?".into() };
-    if !out.status.success() { return "?".into(); }
-    let text = String::from_utf8_lossy(&out.stdout);
+// df -P 출력의 첫 데이터 라인 use% 컬럼 (5번째). 5개 미만이면 None.
+fn parse_df_root_pct(text: &str) -> Option<String> {
     for line in text.lines().skip(1) {
         let p: Vec<&str> = line.split_whitespace().collect();
-        if p.len() >= 5 { return p[4].to_string(); }
+        if p.len() >= 5 { return Some(p[4].to_string()); }
     }
-    "?".into()
+    None
 }
 
-fn collect_vm(running_only: bool) -> anyhow::Result<Vec<VmRow>> {
-    let out = Command::new("qm").arg("list").output()?;
-    if !out.status.success() { anyhow::bail!("qm list 실패"); }
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+// qm list 파싱. running_only면 status가 running이 아닌 행 제외.
+fn parse_qm_list(text: &str, running_only: bool) -> Vec<VmRow> {
     let mut rows = Vec::new();
     for line in text.lines().skip(1) {
         let p: Vec<&str> = line.split_whitespace().collect();
@@ -278,7 +270,30 @@ fn collect_vm(running_only: bool) -> anyhow::Result<Vec<VmRow>> {
             mem_mb: p[3].into(), disk_gb: p[4].into(),
         });
     }
-    Ok(rows)
+    rows
+}
+
+fn lxc_mem_pct(vmid: &str) -> String {
+    let out = Command::new("pct").args(["exec", vmid, "--", "cat", "/proc/meminfo"]).output();
+    let Ok(out) = out else { return "?".into() };
+    if !out.status.success() { return "?".into(); }
+    let text = String::from_utf8_lossy(&out.stdout);
+    parse_meminfo_used_pct(&text).map(|p| format!("{p}%")).unwrap_or_else(|| "?".into())
+}
+
+fn lxc_disk_pct(vmid: &str) -> String {
+    let out = Command::new("pct").args(["exec", vmid, "--", "df", "-P", "/"]).output();
+    let Ok(out) = out else { return "?".into() };
+    if !out.status.success() { return "?".into(); }
+    let text = String::from_utf8_lossy(&out.stdout);
+    parse_df_root_pct(&text).unwrap_or_else(|| "?".into())
+}
+
+fn collect_vm(running_only: bool) -> anyhow::Result<Vec<VmRow>> {
+    let out = Command::new("qm").arg("list").output()?;
+    if !out.status.success() { anyhow::bail!("qm list 실패"); }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(parse_qm_list(&text, running_only))
 }
 
 fn vm(running_only: bool, json: bool) -> anyhow::Result<()> {
@@ -324,4 +339,107 @@ fn all(json: bool) -> anyhow::Result<()> {
     if common::has_cmd("pct") { println!(); lxc(true, false)?; }
     if common::has_cmd("qm")  { println!(); vm(true, false)?; }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ----- parse_kb -----
+
+    #[test]
+    fn parse_kb_normal() {
+        assert_eq!(parse_kb("MemTotal:       527987380 kB"), 527987380);
+    }
+
+    #[test]
+    fn parse_kb_missing() {
+        assert_eq!(parse_kb("MemTotal:"), 0);
+        assert_eq!(parse_kb("MemTotal: notanumber kB"), 0);
+    }
+
+    // ----- parse_meminfo_used_pct -----
+
+    #[test]
+    fn meminfo_basic() {
+        let text = "MemTotal: 1000 kB\nMemAvailable: 250 kB\n";
+        // used = 750 / 1000 = 75%
+        assert_eq!(parse_meminfo_used_pct(text), Some(75));
+    }
+
+    #[test]
+    fn meminfo_zero_total_returns_none() {
+        let text = "MemAvailable: 100 kB\n";
+        assert_eq!(parse_meminfo_used_pct(text), None);
+    }
+
+    #[test]
+    fn meminfo_avail_gt_total_saturates() {
+        // 비정상 입력: avail > total. saturating_sub로 0% 처리.
+        let text = "MemTotal: 100 kB\nMemAvailable: 200 kB\n";
+        assert_eq!(parse_meminfo_used_pct(text), Some(0));
+    }
+
+    #[test]
+    fn meminfo_ignores_other_lines() {
+        let text = "Buffers: 999 kB\nMemTotal: 100 kB\nCached: 50 kB\nMemAvailable: 25 kB\n";
+        assert_eq!(parse_meminfo_used_pct(text), Some(75));
+    }
+
+    // ----- parse_df_root_pct -----
+
+    #[test]
+    fn df_basic() {
+        let text = "Filesystem     1024-blocks    Used Available Capacity Mounted on\n\
+                    /dev/sda1         100000   77000     20000      77% /\n";
+        assert_eq!(parse_df_root_pct(text), Some("77%".into()));
+    }
+
+    #[test]
+    fn df_short_line_returns_none() {
+        let text = "Filesystem 1024-blocks Used Available Capacity Mounted on\n\
+                    only three cols\n";
+        assert_eq!(parse_df_root_pct(text), None);
+    }
+
+    #[test]
+    fn df_only_header_returns_none() {
+        assert_eq!(parse_df_root_pct("Filesystem ..."), None);
+    }
+
+    // ----- parse_qm_list -----
+
+    #[test]
+    fn qm_list_running_only() {
+        let text = "VMID NAME       STATUS  MEM(MB) BOOTDISK(GB) PID\n\
+                    100  web        running  2048    32           1234\n\
+                    101  db         stopped  4096    64           0\n";
+        let rows = parse_qm_list(text, true);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].vmid, "100");
+        assert_eq!(rows[0].status, "running");
+    }
+
+    #[test]
+    fn qm_list_all() {
+        let text = "VMID NAME STATUS MEM DISK PID\n\
+                    100 web running 2048 32 1234\n\
+                    101 db stopped 4096 64 0\n";
+        assert_eq!(parse_qm_list(text, false).len(), 2);
+    }
+
+    #[test]
+    fn qm_list_skips_short_lines() {
+        let text = "VMID NAME STATUS MEM DISK\n\
+                    100 web running 2048 32\n\
+                    bad line\n\
+                    101 db stopped 4096 64\n";
+        assert_eq!(parse_qm_list(text, false).len(), 2);
+    }
+
+    #[test]
+    fn qm_list_empty() {
+        let text = "VMID NAME STATUS MEM DISK PID\n";
+        assert_eq!(parse_qm_list(text, false).len(), 0);
+    }
 }
