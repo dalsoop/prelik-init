@@ -37,6 +37,14 @@ in
       provides = ["nas mount", "nas unmount", "nas list"],
     } | Domain,
 
+    workspace = {
+      name = "workspace",
+      description = "작업 환경 (tmux + shell alias)",
+      tags = { product = 'init, layer = 'tool, platform = 'debian },
+      provides = ["workspace tmux-setup", "workspace shell-setup", "workspace status"],
+    } | Domain,
+
+
 
 
     connect = {

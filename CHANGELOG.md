@@ -2,6 +2,25 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.12.0] - 2026-04-15
+
+### Added (Phase 1 완료 — 3/3)
+- **prelik-workspace**: tmux 기본 설정 + shell alias (~/.bashrc.d/prelik.sh)
+  - tmux-setup: 기본 .tmux.conf (vim 키바인딩, mouse, base-index 1)
+  - shell-setup: 편의 alias (ll, g, gs, bat/eza 자동 대체)
+  - ~/.bashrc에 `.bashrc.d/*.sh` source 자동 등록
+- Phase 1 전체 이식 완료:
+  - [x] host (v0.10.0)
+  - [x] nas (v0.11.0)
+  - [x] workspace (v0.12.0)
+
+### 이식률 재평가
+- 총 10개 도메인: ai, bootstrap, cloudflare, connect, host, lxc, mail, nas,
+  traefik, workspace
+- phs의 "범용 공유 가치" 영역 거의 완성.
+- 남은 것은 dalsoop 환경에 깊이 박힌 것 (telegram 봇, ComfyUI, OpenClaw 등)
+  또는 별도 일반화 작업 필요한 것 (account/RBAC, cluster-files, homelable).
+
 ## [0.9.0] - 2026-04-15
 
 ### Added
