@@ -1,0 +1,30 @@
+[service]
+name = "nginx"
+description = "Nginx 기본 웹서버 + systemd + 기본 페이지"
+
+[lxc]
+cores = "1"
+memory = "512"
+disk = "4"
+
+[install]
+packages = ["nginx", "curl"]
+
+[[install.steps]]
+name = "기본 페이지 배포"
+run = """
+cat > /var/www/html/index.html << 'HTML'
+<!DOCTYPE html><html>
+<head><title>Prelik nginx</title></head>
+<body><h1>Deployed via prelik-deploy</h1><p>nginx LXC</p></body>
+</html>
+HTML
+"""
+
+[[install.steps]]
+name = "systemd enable + start"
+run = "systemctl enable --now nginx"
+
+[[install.steps]]
+name = "상태 확인"
+run = "systemctl is-active nginx && curl -s http://localhost/ | grep -q 'Prelik nginx' && echo '✓ nginx 동작'"

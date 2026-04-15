@@ -80,6 +80,15 @@ in
       provides = ["backup now", "backup list", "backup schedule-add", "backup restore"],
     } | Domain,
 
+    deploy = {
+      name = "deploy",
+      description = "레시피 기반 LXC 자동 배포 (TOML)",
+      tags = { product = 'infra, layer = 'remote, platform = 'proxmox },
+      requires = ["lxc"],
+      provides = ["deploy service", "deploy list-recipes"],
+    } | Domain,
+
+
 
 
 
