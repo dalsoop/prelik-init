@@ -149,26 +149,41 @@ fn mount_nfs(host: &str, share: &str, target: &str, persist: bool) -> anyhow::Re
 }
 
 fn fstab_add(target: &str, fstab_line: &str) -> anyhow::Result<()> {
-    // 이미 있으면 건너뜀 — grep -F로 고정문자열 매칭
-    let check = std::process::Command::new("grep")
-        .args(["-qF", target, "/etc/fstab"])
+    // 이미 있으면 건너뜀 — sudo로 확실하게 읽어서 체크 (권한 잠긴 시스템 대응)
+    let check = std::process::Command::new("sudo")
+        .args(["grep", "-qF", target, "/etc/fstab"])
         .status();
     if check.ok().map(|s| s.success()).unwrap_or(false) {
         println!("  ⊘ /etc/fstab에 이미 등록됨 — 건너뜀");
         return Ok(());
     }
-    // tempfile로 append 안전하게
-    let (tmp, _g) = secure_tempfile()?;
-    let current = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
-    let appended = if current.ends_with('\n') || current.is_empty() {
-        format!("{current}{fstab_line}\n")
-    } else {
-        format!("{current}\n{fstab_line}\n")
-    };
-    std::fs::write(&tmp, appended)?;
-    common::run("sudo", &["install", "-m", "644", "-o", "root", "-g", "root", &tmp, "/etc/fstab"])?;
-    println!("  ✓ /etc/fstab 등록 (재부팅 후에도 유지)");
-    Ok(())
+
+    // append 전용 접근 — tee -a 사용.
+    // read_to_string(...).unwrap_or_default() 패턴은 /etc/fstab 읽기 실패 시
+    // 빈 파일로 "덮어쓰기"하는 재앙 유발 가능 (권한 0640 하드닝 등).
+    // tee -a는 기존 내용 보존하며 append만.
+    let line_with_nl = format!("{fstab_line}\n");
+    let output = std::process::Command::new("sudo")
+        .args(["tee", "-a", "/etc/fstab"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin.write_all(line_with_nl.as_bytes())?;
+            }
+            child.wait()
+        });
+
+    match output {
+        Ok(status) if status.success() => {
+            println!("  ✓ /etc/fstab 등록 (재부팅 후에도 유지)");
+            Ok(())
+        }
+        Ok(status) => anyhow::bail!("fstab append 실패 (exit: {})", status.code().unwrap_or(-1)),
+        Err(e) => anyhow::bail!("sudo tee -a 실행 실패: {e}"),
+    }
 }
 
 /// mktemp 0600 + Drop 가드
