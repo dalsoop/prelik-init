@@ -97,15 +97,20 @@ fn list(vmid: Option<&str>, dir: &str) -> anyhow::Result<()> {
     println!("=== 백업 파일 목록 ({dir}) ===");
     // LXC: *.tar.zst / .tar.gz
     // QEMU(VM): *.vma.zst / .vma.gz / .vma.lzo
-    let pattern = match vmid {
-        Some(v) => format!(
-            "vzdump-*-{v}-*.tar.zst vzdump-*-{v}-*.tar.gz vzdump-*-{v}-*.vma.zst vzdump-*-{v}-*.vma.gz vzdump-*-{v}-*.vma.lzo"
-        ),
-        None => "vzdump-*.tar.zst vzdump-*.tar.gz vzdump-*.vma.zst vzdump-*.vma.gz vzdump-*.vma.lzo".to_string(),
+    // 각 glob마다 dir 접두사를 개별 부여 (안 하면 cwd 기준으로 오인)
+    let globs: Vec<String> = match vmid {
+        Some(v) => ["tar.zst", "tar.gz", "vma.zst", "vma.gz", "vma.lzo"]
+            .iter()
+            .map(|ext| format!("{dir}/vzdump-*-{v}-*.{ext}"))
+            .collect(),
+        None => ["tar.zst", "tar.gz", "vma.zst", "vma.gz", "vma.lzo"]
+            .iter()
+            .map(|ext| format!("{dir}/vzdump-*.{ext}"))
+            .collect(),
     };
-    // ls로 파일 목록 + 크기 — 패턴 미매칭 오류 억제
+    let pattern = globs.join(" ");
     let cmd = format!(
-        "ls -lah {dir}/{pattern} 2>/dev/null | awk '{{print $NF, \"(\", $5, \")\"}}'"
+        "ls -lah {pattern} 2>/dev/null | awk '{{print $NF, \"(\", $5, \")\"}}'"
     );
     match common::run_bash(&cmd) {
         Ok(out) => {
