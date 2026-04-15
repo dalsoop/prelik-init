@@ -9,10 +9,6 @@
       description = "메일 발송/수신 아카이브 스택",
       domains = ["bootstrap", "lxc", "mail", "cloudflare", "connect"],
     },
-    full = {
-      description = "전체 도메인 (bootstrap 제외, 수동)",
-      domains = ["lxc", "traefik", "mail", "cloudflare", "connect", "ai"],
-    },
     minimal = {
       description = "필수 최소 (bootstrap만)",
       domains = ["bootstrap"],

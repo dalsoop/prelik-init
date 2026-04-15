@@ -23,7 +23,7 @@ enum Cmd {
     Install {
         /// 도메인 이름 (공백 구분, 여러 개)
         domains: Vec<String>,
-        /// 프리셋 이름 (web, mail, full, dev, minimal)
+        /// 프리셋 이름 (web, mail, dev, minimal)
         #[arg(long)]
         preset: Option<String>,
     },
@@ -185,7 +185,6 @@ fn list_available() -> anyhow::Result<()> {
     println!("\n프리셋 (--preset 으로 한 번에 설치):");
     println!("  web         웹 호스팅 (bootstrap, lxc, traefik, cloudflare)");
     println!("  mail        메일 스택 (bootstrap, lxc, mail, cloudflare, connect)");
-    println!("  full        전체 도메인");
     println!("  dev         개발 도구 (bootstrap, ai, connect)");
     println!("  minimal     필수 최소 (bootstrap)");
     Ok(())
@@ -215,7 +214,6 @@ fn resolve_preset(name: &str) -> Option<Vec<String>> {
     match name {
         "web" => Some(vec!["bootstrap", "lxc", "traefik", "cloudflare"]),
         "mail" => Some(vec!["bootstrap", "lxc", "mail", "cloudflare", "connect"]),
-        "full" => Some(vec!["lxc", "traefik", "mail", "cloudflare", "connect", "ai"]),
         "minimal" => Some(vec!["bootstrap"]),
         "dev" => Some(vec!["bootstrap", "ai", "connect"]),
         _ => None,
@@ -225,7 +223,7 @@ fn resolve_preset(name: &str) -> Option<Vec<String>> {
 fn install_many(mut domains: Vec<String>, preset: Option<&str>) -> anyhow::Result<()> {
     if let Some(p) = preset {
         let expanded = resolve_preset(p)
-            .ok_or_else(|| anyhow::anyhow!("알 수 없는 프리셋: {p} (web/mail/full/dev/minimal)"))?;
+            .ok_or_else(|| anyhow::anyhow!("알 수 없는 프리셋: {p} (web/mail/dev/minimal)"))?;
         println!("=== 프리셋 '{p}' 설치: {} ===\n", expanded.join(", "));
         // preset 먼저, 그 뒤 명시적 domains (중복 제거)
         let mut all = expanded;

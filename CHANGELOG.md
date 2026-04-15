@@ -2,6 +2,12 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.7.1] - 2026-04-15
+
+### Removed
+- `full` 프리셋 제거 — 무차별 전체 설치는 의도치 않은 사이드이펙트 위험.
+  필요한 도메인은 이름 명시 또는 용도별 프리셋(web/mail/dev/minimal) 사용.
+
 ## [0.7.0] - 2026-04-15
 
 ### Added

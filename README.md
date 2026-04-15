@@ -56,7 +56,6 @@ prelik install bootstrap lxc traefik # 공백으로 여러 개
 프리셋:
 - `web` — 웹 호스팅 기본 (bootstrap, lxc, traefik, cloudflare)
 - `mail` — 메일 스택 (bootstrap, lxc, mail, cloudflare, connect)
-- `full` — 전체 도메인
 - `dev` — 개발 도구 (bootstrap, ai, connect)
 - `minimal` — 필수 최소 (bootstrap)
 
