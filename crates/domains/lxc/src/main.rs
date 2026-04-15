@@ -313,6 +313,12 @@ fn status(vmid: &str, json: bool) -> anyhow::Result<()> {
     }
     let value = body.strip_prefix("status: ")
         .ok_or_else(|| anyhow::anyhow!("pct status 출력 형식이 'status: <value>' 아님: {raw:?}"))?;
+    // 값은 비어 있어선 안 되고, 양끝 공백/내부 공백/추가 콜론 등 드리프트 거부.
+    // pct status가 반환할 수 있는 정상 상태값 whitelist.
+    const KNOWN: &[&str] = &["running", "stopped", "paused", "suspended"];
+    if !KNOWN.contains(&value) {
+        anyhow::bail!("pct status 값이 알 수 없는 형태: {value:?} (허용: {KNOWN:?})");
+    }
     let payload = serde_json::json!({ "vmid": vmid, "status": value });
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
