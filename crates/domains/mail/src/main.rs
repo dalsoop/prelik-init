@@ -106,11 +106,55 @@ fn postfix_relay(maddy_ip: &str, port: &str) -> anyhow::Result<()> {
         anyhow::bail!("Postfix 미설치. apt install postfix 먼저");
     }
 
-    // main.cf 자동 백업 (동일 초 내 재실행에도 안전하게 nanosecond 포함)
-    let ts = common::run("date", &["+%Y%m%d-%H%M%S.%N"]).unwrap_or_else(|_| "backup".into());
-    let backup = format!("/etc/postfix/main.cf.prelik-{}", ts.trim());
-    common::run_bash(&format!("sudo cp /etc/postfix/main.cf {backup}"))?;
-    println!("  백업: {backup}");
+    // 자동 백업 — main.cf + sasl_passwd + sender_canonical
+    // (보조 맵 파일도 덮어쓰기 전에 저장해야 완전한 rollback이 가능)
+    let ts_out = common::run("date", &["+%Y%m%d-%H%M%S.%N"]).unwrap_or_else(|_| "backup".into());
+    let ts = ts_out.trim();
+    let backup_dir = format!("/etc/postfix/prelik-backup-{ts}");
+    common::run_bash(&format!("sudo mkdir -p {backup_dir}"))?;
+
+    struct BackupSet {
+        dir: String,
+        files: Vec<&'static str>,
+    }
+    let backup = BackupSet {
+        dir: backup_dir.clone(),
+        files: vec!["main.cf", "sasl_passwd", "sasl_passwd.db", "sender_canonical"],
+    };
+    for f in &backup.files {
+        // 존재하는 파일만 백업 (sasl_passwd 등은 이 실행 전에는 없을 수도)
+        common::run_bash(&format!(
+            "[ -e /etc/postfix/{f} ] && sudo cp -a /etc/postfix/{f} {}/{f} || true",
+            backup.dir
+        ))?;
+    }
+    println!("  백업: {}", backup.dir);
+
+    // 실패 시 원본을 되돌리는 헬퍼
+    let rollback = |reason: &str| -> anyhow::Result<()> {
+        eprintln!("⚠ {reason} — 원본 복원 중...");
+        // 새로 만든 파일이 있으면 삭제하고, 백업이 있으면 복원
+        for f in &backup.files {
+            let src_path = format!("{}/{f}", backup.dir);
+            let dst_path = format!("/etc/postfix/{f}");
+            let restore_result = common::run_bash(&format!(
+                "if [ -e '{src_path}' ]; then                    sudo cp -a '{src_path}' '{dst_path}';                  else                    sudo rm -f '{dst_path}';                  fi"
+            ));
+            if let Err(e) = restore_result {
+                return Err(anyhow::anyhow!(
+                    "복원 실패 ({f}): {e} — 수동 복구 필요. 백업: {}",
+                    backup.dir
+                ));
+            }
+        }
+        // 원본 설정으로 postfix reload — 실패하면 명시적으로 에러
+        common::run_bash("sudo systemctl reload postfix")
+            .map_err(|e| anyhow::anyhow!(
+                "원본 복원 후 postfix reload 실패: {e} — 수동 확인 필요. 백업: {}",
+                backup.dir
+            ))?;
+        Ok(())
+    };
 
     // libsasl2-modules (SASL plugin — 누락 시 relay가 조용히 깨짐)
     if common::run("dpkg", &["-s", "libsasl2-modules"]).is_err() {
@@ -158,21 +202,27 @@ sender_canonical_maps = regexp:/etc/postfix/sender_canonical
         "sudo install -m 644 -o root -g root {can_tmp} /etc/postfix/sender_canonical"
     ))?;
 
-    // 설정 적용 전 한번 더 검증
+    // 1) postfix check — 실패 시 전체 rollback
     if let Err(e) = common::run_bash("sudo postfix check") {
-        eprintln!("⚠ postfix check 실패 — main.cf 롤백 중: {e}");
-        common::run_bash(&format!("sudo cp {backup} /etc/postfix/main.cf"))?;
-        anyhow::bail!("postfix 설정 검증 실패, main.cf 롤백 완료. 백업: {backup}");
+        rollback(&format!("postfix check 실패: {e}"))?;
+        anyhow::bail!("설정 검증 실패, 원본 복원 완료. 백업: {backup_dir}");
     }
 
-    if let Err(e) = common::run_bash("sudo systemctl reload postfix && sudo postfix flush") {
-        eprintln!("⚠ postfix reload 실패 — main.cf 롤백 중: {e}");
-        common::run_bash(&format!("sudo cp {backup} /etc/postfix/main.cf"))?;
-        common::run_bash("sudo systemctl reload postfix").ok();
-        anyhow::bail!("postfix reload 실패, main.cf 롤백 완료. 백업: {backup}");
+    // 2) postfix reload — 설정 적용. 실패 시 rollback.
+    //    flush는 별개 동작이므로 reload와 분리.
+    if let Err(e) = common::run_bash("sudo systemctl reload postfix") {
+        rollback(&format!("postfix reload 실패: {e}"))?;
+        anyhow::bail!("reload 실패, 원본 복원 완료. 백업: {backup_dir}");
     }
+
+    // 3) postfix flush — 이미 쌓인 deferred 메일 재시도. 실패해도 설정 자체는 OK.
+    if let Err(e) = common::run_bash("sudo postfix flush") {
+        eprintln!("⚠ postfix flush 실패 (설정 적용은 성공): {e}");
+        eprintln!("  큐 재시도는 수동으로: sudo postfix flush");
+    }
+
     println!("✓ Postfix → [{maddy_ip}]:{port} relay 설정 완료");
-    println!("  롤백이 필요하면: sudo cp {backup} /etc/postfix/main.cf && sudo systemctl reload postfix");
+    println!("  롤백: sudo cp -a {backup_dir}/main.cf /etc/postfix/ && sudo systemctl reload postfix");
     Ok(())
 }
 

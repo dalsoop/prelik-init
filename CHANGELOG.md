@@ -2,6 +2,18 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.7.4] - 2026-04-15
+
+### Fixed (Codex 3차 리뷰)
+- **P1 rollback 복원 실패 은닉**: main.cf 복원 후 systemctl reload를 `.ok()`로
+  버려서 복구 실패해도 "완료"라 표시하던 문제. 이제 reload 실패는 bail!().
+- **P1 보조 맵 파일 미복원**: rollback이 main.cf만 되돌려 `sasl_passwd` /
+  `sender_canonical`은 새 값으로 남던 문제. 모든 관련 파일을 디렉토리에
+  백업하고 실패 시 전체 복원.
+- **P2 `postfix flush` 오분류**: `reload && flush`를 AND로 묶어 flush만
+  실패해도 rollback 유발. reload(설정 적용)와 flush(큐 재시도)를 분리.
+  flush 실패는 경고만 출력.
+
 ## [0.7.3] - 2026-04-15
 
 ### Fixed (Codex 재리뷰)
