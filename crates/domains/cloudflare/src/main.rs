@@ -121,14 +121,32 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+/// acme.sh 실제 경로 찾기.
+/// 1) PATH에 있음, 2) ~/.acme.sh/acme.sh (표준 설치),
+/// 3) /root/.acme.sh/acme.sh (sudo 설치)
+fn find_acme_sh() -> Option<String> {
+    if common::has_cmd("acme.sh") {
+        return Some("acme.sh".to_string());
+    }
+    let candidates = [
+        dirs::home_dir().map(|h| h.join(".acme.sh/acme.sh")),
+        Some(std::path::PathBuf::from("/root/.acme.sh/acme.sh")),
+    ];
+    for c in candidates.iter().flatten() {
+        if c.exists() {
+            return Some(c.display().to_string());
+        }
+    }
+    None
+}
+
 fn ssl_issue(email: &str, key: &str, domain: &str, wildcard: bool) -> anyhow::Result<()> {
     println!("=== SSL 발급: {domain} (wildcard: {wildcard}) ===");
-    if !common::has_cmd("acme.sh") {
-        anyhow::bail!(
-            "acme.sh 미설치. 설치: curl https://get.acme.sh | sh\n\
-             또는 sudo snap install acme, 또는 자체 경로."
-        );
-    }
+    let acme = find_acme_sh().ok_or_else(|| anyhow::anyhow!(
+        "acme.sh 미설치. 설치: curl https://get.acme.sh | sh\n\
+         확인된 경로: PATH, ~/.acme.sh/, /root/.acme.sh/"
+    ))?;
+    println!("  acme.sh: {acme}");
     // CF credentials env로 acme.sh에 전달
     // wildcard: -d *.domain -d domain 둘 다 필요
     let mut args: Vec<String> = vec!["--issue".into(), "--dns".into(), "dns_cf".into()];
@@ -140,7 +158,7 @@ fn ssl_issue(email: &str, key: &str, domain: &str, wildcard: bool) -> anyhow::Re
     args.push(domain.to_string());
 
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let output = std::process::Command::new("acme.sh")
+    let output = std::process::Command::new(&acme)
         .args(&args_ref)
         .env("CF_Email", email)
         .env("CF_Key", key)
@@ -159,10 +177,8 @@ fn ssl_issue(email: &str, key: &str, domain: &str, wildcard: bool) -> anyhow::Re
 
 fn ssl_renew(domain: &str) -> anyhow::Result<()> {
     println!("=== SSL 갱신: {domain} ===");
-    if !common::has_cmd("acme.sh") {
-        anyhow::bail!("acme.sh 미설치");
-    }
-    let output = std::process::Command::new("acme.sh")
+    let acme = find_acme_sh().ok_or_else(|| anyhow::anyhow!("acme.sh 미설치"))?;
+    let output = std::process::Command::new(&acme)
         .args(["--renew", "-d", domain, "--force"])
         .output()?;
     if !output.status.success() {
