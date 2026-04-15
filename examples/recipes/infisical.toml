@@ -15,17 +15,16 @@ name = "Docker daemon enable"
 run = "systemctl enable --now docker"
 
 [[install.steps]]
-name = "compose + .env 자동 생성"
+name = "compose + .env 자동 생성 (POSTGRES/REDIS 포함)"
 run = """
 mkdir -p /opt/infisical
 cd /opt/infisical
 
-# 공식 self-host docker-compose (v2 최신)
+# 공식 self-host compose (backend + postgres + redis)
 [ -f docker-compose.yml ] || curl -fsSL \
   https://raw.githubusercontent.com/Infisical/infisical/main/docker-compose.prod.yml \
   -o docker-compose.yml
 
-# .env 기본값 (시크릿 자동 생성)
 if [ ! -f .env ]; then
   ENCRYPTION_KEY=$(openssl rand -hex 16)
   AUTH_SECRET=$(openssl rand -base64 32)
@@ -35,8 +34,9 @@ if [ ! -f .env ]; then
   JWT_MFA_SECRET=$(openssl rand -hex 32)
   JWT_SERVICE_SECRET=$(openssl rand -hex 32)
   JWT_PROVIDER_AUTH_SECRET=$(openssl rand -hex 32)
-  PORT="${INFISICAL_PORT:-8080}"
+  PG_PASSWORD=$(openssl rand -hex 16)
 
+  # upstream compose가 backend:80 → host:80으로 publish함. SITE_URL/검증 모두 :80.
   cat > .env << ENV
 ENCRYPTION_KEY=${ENCRYPTION_KEY}
 AUTH_SECRET=${AUTH_SECRET}
@@ -46,7 +46,12 @@ JWT_AUTH_SECRET=${JWT_AUTH_SECRET}
 JWT_MFA_SECRET=${JWT_MFA_SECRET}
 JWT_SERVICE_SECRET=${JWT_SERVICE_SECRET}
 JWT_PROVIDER_AUTH_SECRET=${JWT_PROVIDER_AUTH_SECRET}
-SITE_URL=${INFISICAL_SITE_URL:-http://localhost:${PORT}}
+POSTGRES_USER=infisical
+POSTGRES_PASSWORD=${PG_PASSWORD}
+POSTGRES_DB=infisical
+DB_CONNECTION_URI=postgres://infisical:${PG_PASSWORD}@db:5432/infisical
+REDIS_URL=redis://redis:6379
+SITE_URL=${INFISICAL_SITE_URL:-http://localhost:80}
 ENV
   chmod 600 .env
 fi
@@ -57,13 +62,12 @@ name = "compose up -d"
 run = "cd /opt/infisical && docker compose up -d"
 
 [[install.steps]]
-name = "검증 (포트 응답까지 60초)"
+name = "검증 (:80 응답까지 120초 — db migration 포함)"
 run = """
-PORT="${INFISICAL_PORT:-8080}"
-for i in $(seq 1 60); do
-  curl -fsS http://localhost:${PORT}/ -o /dev/null && echo "✓ infisical 동작 (:${PORT})" && exit 0
+for i in $(seq 1 120); do
+  curl -fsS http://localhost:80/ -o /dev/null && echo "✓ infisical 동작 (:80)" && exit 0
   sleep 1
 done
-echo "✗ infisical 시작 실패 (60초 타임아웃) — docker compose logs로 확인" >&2
+echo "✗ infisical 시작 실패 (120초 타임아웃) — docker compose logs로 확인" >&2
 exit 1
 """

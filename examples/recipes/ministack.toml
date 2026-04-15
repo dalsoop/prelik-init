@@ -15,26 +15,17 @@ name = "Docker daemon enable"
 run = "systemctl enable --now docker"
 
 [[install.steps]]
-name = "compose 생성"
+name = "upstream docker-compose.yml 다운로드 (redis + docker.sock 포함)"
 run = """
 mkdir -p /opt/ministack
 cd /opt/ministack
-PORT="${MINISTACK_PORT:-4566}"
+[ -f docker-compose.yml ] || curl -fsSL \
+  https://raw.githubusercontent.com/ministackorg/ministack/main/docker-compose.yml \
+  -o docker-compose.yml
 
-[ -f docker-compose.yml ] || cat > docker-compose.yml << YAML
-services:
-  ministack:
-    image: ministackorg/ministack:latest
-    restart: always
-    ports:
-      - "${PORT}:4566"
-      - "4571:4571"
-    environment:
-      - SERVICES=${MINISTACK_SERVICES:-s3,sqs,lambda,dynamodb}
-      - DEBUG=${MINISTACK_DEBUG:-0}
-    volumes:
-      - /opt/ministack/data:/var/lib/ministack
-YAML
+# upstream compose는 build: . (로컬 빌드). prelik은 pre-built image만 사용하도록 패치.
+# 'build: .' 라인 제거 → 'image: ministackorg/ministack:latest'만 사용.
+sed -i '/^\\s*build:\\s*\\.\\s*$/d' docker-compose.yml
 """
 
 [[install.steps]]
@@ -42,14 +33,13 @@ name = "compose up -d"
 run = "cd /opt/ministack && docker compose up -d"
 
 [[install.steps]]
-name = "AWS CLI 환경변수 설정 (/etc/profile.d/ministack.sh)"
+name = "AWS CLI 환경변수 주입 (/etc/profile.d/ministack.sh)"
 run = """
-PORT="${MINISTACK_PORT:-4566}"
-cat > /etc/profile.d/ministack.sh << SH
+cat > /etc/profile.d/ministack.sh << 'SH'
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_DEFAULT_REGION=us-east-1
-export AWS_ENDPOINT_URL=http://localhost:${PORT}
+export AWS_ENDPOINT_URL=http://localhost:4566
 SH
 chmod 644 /etc/profile.d/ministack.sh
 """
@@ -57,11 +47,10 @@ chmod 644 /etc/profile.d/ministack.sh
 [[install.steps]]
 name = "검증 (/_ministack/health)"
 run = """
-PORT="${MINISTACK_PORT:-4566}"
-for i in $(seq 1 60); do
-  curl -fsS http://localhost:${PORT}/_ministack/health -o /dev/null && echo "✓ ministack 동작 (:${PORT})" && exit 0
+for i in $(seq 1 90); do
+  curl -fsS http://localhost:4566/_ministack/health -o /dev/null && echo "✓ ministack 동작 (:4566)" && exit 0
   sleep 1
 done
-echo "✗ ministack 시작 실패 (60초 타임아웃) — docker compose logs로 확인" >&2
+echo "✗ ministack 시작 실패 (90초 타임아웃) — docker compose logs로 확인" >&2
 exit 1
 """
