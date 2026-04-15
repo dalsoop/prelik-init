@@ -31,6 +31,33 @@ enum Cmd {
         #[arg(long)]
         proxied: Option<bool>,
     },
+    /// DNS 레코드 목록
+    DnsList {
+        #[arg(long)]
+        domain: String,
+    },
+    /// DNS 레코드 수정
+    DnsUpdate {
+        #[arg(long)]
+        domain: String,
+        #[arg(long = "type")]
+        record_type: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        content: String,
+        #[arg(long)]
+        proxied: Option<bool>,
+    },
+    /// DNS 레코드 삭제
+    DnsDelete {
+        #[arg(long)]
+        domain: String,
+        #[arg(long = "type")]
+        record_type: String,
+        #[arg(long)]
+        name: String,
+    },
     /// 모든 enabled 도메인의 catch-all을 Worker로 전환
     EmailWorkerAttachAll {
         #[arg(long)]
@@ -66,6 +93,13 @@ fn main() -> anyhow::Result<()> {
                 (None, None) => anyhow::bail!("--proxied 또는 --audience 중 하나 필수"),
             };
             dns_add(&email, &key, &domain, &record_type, &name, &content, p)
+        }
+        Cmd::DnsList { domain } => dns_list(&email, &key, &domain),
+        Cmd::DnsUpdate { domain, record_type, name, content, proxied } => {
+            dns_update(&email, &key, &domain, &record_type, &name, &content, proxied)
+        }
+        Cmd::DnsDelete { domain, record_type, name } => {
+            dns_delete(&email, &key, &domain, &record_type, &name)
         }
         Cmd::EmailWorkerAttachAll { worker, dry_run } => worker_attach_all(&email, &key, &worker, dry_run),
         Cmd::Doctor => unreachable!("Doctor는 위에서 early return"),
@@ -117,6 +151,55 @@ fn dns_add(email: &str, key: &str, domain: &str, rec_type: &str, name: &str, con
     });
     cf_api(email, key, "POST", &format!("/zones/{zid}/dns_records"), Some(&body.to_string()))?;
     println!("✓ DNS 추가: {rec_type} {name} → {content} (proxied={proxied})");
+    Ok(())
+}
+
+fn dns_list(email: &str, key: &str, domain: &str) -> anyhow::Result<()> {
+    let zid = zone_id(email, key, domain)?;
+    let records = cf_api(email, key, "GET", &format!("/zones/{zid}/dns_records?per_page=100"), None)?;
+    let Some(arr) = records.as_array() else { anyhow::bail!("dns_records 응답 파싱 실패") };
+    println!("=== DNS 레코드: {domain} ({}) ===", arr.len());
+    for r in arr {
+        let t = r["type"].as_str().unwrap_or("?");
+        let n = r["name"].as_str().unwrap_or("?");
+        let c = r["content"].as_str().unwrap_or("?");
+        let p = r["proxied"].as_bool().unwrap_or(false);
+        let icon = if p { "☁" } else { "→" };
+        println!("  {t:<8} {n:<40} {icon} {c}");
+    }
+    Ok(())
+}
+
+/// 기존 레코드 찾기 — type + name 매칭
+fn find_record(email: &str, key: &str, zid: &str, rec_type: &str, name: &str) -> anyhow::Result<String> {
+    let records = cf_api(email, key, "GET", &format!("/zones/{zid}/dns_records?type={rec_type}&name={name}"), None)?;
+    let Some(arr) = records.as_array() else { anyhow::bail!("응답 파싱 실패") };
+    let Some(first) = arr.first() else {
+        anyhow::bail!("레코드 없음: {rec_type} {name}")
+    };
+    first["id"].as_str().map(String::from)
+        .ok_or_else(|| anyhow::anyhow!("record id 없음"))
+}
+
+fn dns_update(email: &str, key: &str, domain: &str, rec_type: &str, name: &str, content: &str, proxied: Option<bool>) -> anyhow::Result<()> {
+    let zid = zone_id(email, key, domain)?;
+    let rid = find_record(email, key, &zid, rec_type, name)?;
+    let mut body = serde_json::json!({
+        "type": rec_type, "name": name, "content": content
+    });
+    if let Some(p) = proxied {
+        body["proxied"] = serde_json::json!(p);
+    }
+    cf_api(email, key, "PUT", &format!("/zones/{zid}/dns_records/{rid}"), Some(&body.to_string()))?;
+    println!("✓ DNS 수정: {rec_type} {name} → {content}");
+    Ok(())
+}
+
+fn dns_delete(email: &str, key: &str, domain: &str, rec_type: &str, name: &str) -> anyhow::Result<()> {
+    let zid = zone_id(email, key, domain)?;
+    let rid = find_record(email, key, &zid, rec_type, name)?;
+    cf_api(email, key, "DELETE", &format!("/zones/{zid}/dns_records/{rid}"), None)?;
+    println!("✓ DNS 삭제: {rec_type} {name}");
     Ok(())
 }
 

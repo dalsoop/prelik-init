@@ -99,6 +99,11 @@ prelik run bootstrap remove  --only nickel         # 선택 제거
 
 - [examples/formbricks.md](examples/formbricks.md) — Formbricks 설문조사 + Traefik + CF
 
+## phs (내부 도구)와 비교
+
+prelik-init은 dalsoop의 내부 도구 phs의 ~25%를 추출한 서브셋입니다.
+정확한 동작 차이와 누락 기능: [docs/phs-vs-prelik.md](docs/phs-vs-prelik.md)
+
 ---
 
 ## 설계 원칙

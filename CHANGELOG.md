@@ -2,6 +2,24 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.9.0] - 2026-04-15
+
+### Added
+- **cloudflare dns list/update/delete**: phs의 CRUD를 prelik에 이식. 기존
+  add만 있던 것에서 완전한 CRUD로 확장.
+  - `dns-list`: phs와 거의 동일 출력 포맷
+  - `dns-update`: type+name으로 기존 레코드 찾아 교체
+  - `dns-delete`: 동일 방식으로 삭제
+- **docs/phs-vs-prelik.md**: phs ↔ prelik 솔직한 비교표.
+  - 도메인별 이식 커맨드 매핑
+  - prelik이 우수한 점 8개 / 못 하는 점 7개 명시
+  - 로드맵 (remote node, bootstrap, SSL, NAS 등)
+- README에서 비교 문서 링크
+
+### Documented
+- phs 대비 prelik 이식률: 약 **23%**
+- 미이식 도메인: host, nas, telegram, workspace, account
+
 ## [0.8.2] - 2026-04-15
 
 ### Added
