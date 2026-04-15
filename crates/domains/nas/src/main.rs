@@ -77,62 +77,125 @@ fn mount(
     println!("  source: {host}:{share}");
     println!("  target: {target}");
 
-    common::run_bash(&format!("sudo mkdir -p {target}"))?;
+    // mkdir은 argv로 직접 (shell interpolation 회피)
+    common::run("sudo", &["mkdir", "-p", target])?;
 
-    let (mount_cmd, fstab_line) = match protocol {
-        Protocol::Smb => {
-            // SMB 크리덴셜: 인자 > .env > prompt 에러
-            let user = user.map(String::from).unwrap_or_else(|| read_env("NAS_USER"));
-            let password = password.map(String::from).unwrap_or_else(|| read_env("NAS_PASSWORD"));
-            if user.is_empty() {
-                anyhow::bail!("SMB 마운트에는 --user 또는 NAS_USER 환경변수 필요");
-            }
-            let options = if password.is_empty() {
-                format!("username={user},vers=3.0")
-            } else {
-                format!("username={user},password={password},vers=3.0")
-            };
-            let cmd = format!(
-                "sudo mount -t cifs -o {} //{}/{} {}",
-                options, host, share, target
-            );
-            let fstab = format!(
-                "//{host}/{share} {target} cifs {options},_netdev,nofail 0 0"
-            );
-            (cmd, fstab)
-        }
-        Protocol::Nfs => {
-            let cmd = format!("sudo mount -t nfs {}:{} {}", host, share, target);
-            let fstab = format!(
-                "{host}:{share} {target} nfs _netdev,nofail 0 0"
-            );
-            (cmd, fstab)
-        }
+    match protocol {
+        Protocol::Smb => mount_smb(host, share, target, user, password, persist),
+        Protocol::Nfs => mount_nfs(host, share, target, persist),
+    }
+}
+
+fn mount_smb(
+    host: &str, share: &str, target: &str,
+    user: Option<&str>, password: Option<&str>,
+    persist: bool,
+) -> anyhow::Result<()> {
+    let user = user.map(String::from).unwrap_or_else(|| read_env("NAS_USER"));
+    let password = password.map(String::from).unwrap_or_else(|| read_env("NAS_PASSWORD"));
+    if user.is_empty() {
+        anyhow::bail!("SMB 마운트에는 --user 또는 NAS_USER 환경변수 필요");
+    }
+
+    // credentials 파일 경로 (host-share 키로 고유화)
+    // 비밀번호를 ps/cmdline/fstab에 노출하지 않음
+    let safe_name = format!("{host}_{share}")
+        .chars().map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect::<String>();
+    let cred_path = format!("/etc/cifs-credentials/{safe_name}");
+
+    // 디렉토리 + 크리덴셜 파일 작성 (0600, root:root) — mktemp 경유
+    common::run("sudo", &["mkdir", "-p", "/etc/cifs-credentials"])?;
+    common::run("sudo", &["chmod", "700", "/etc/cifs-credentials"])?;
+
+    // tempfile로 로컬 생성 후 sudo install로 원자적 이동
+    let (tmp, _guard) = secure_tempfile()?;
+    let content = if password.is_empty() {
+        format!("username={user}\n")
+    } else {
+        format!("username={user}\npassword={password}\n")
     };
+    std::fs::write(&tmp, content)?;
+    common::run("sudo", &[
+        "install", "-m", "600", "-o", "root", "-g", "root",
+        &tmp, &cred_path,
+    ])?;
 
-    common::run_bash(&mount_cmd)?;
-    println!("✓ 마운트 완료");
+    // mount 호출 — 모든 인자를 argv로 직접
+    let source = format!("//{host}/{share}");
+    let options = format!("credentials={cred_path},vers=3.0,iocharset=utf8,_netdev,nofail");
+    common::run("sudo", &[
+        "mount", "-t", "cifs", "-o", &options, &source, target,
+    ])?;
+    println!("✓ 마운트 완료 (credentials: {cred_path}, 0600)");
 
     if persist {
-        // fstab에 이미 있는지 확인
-        let check = format!("grep -qF '{target}' /etc/fstab");
-        if common::run_bash(&check).is_ok() {
-            println!("  ⊘ /etc/fstab에 이미 등록됨 — 건너뜀");
-        } else {
-            common::run_bash(&format!("echo '{}' | sudo tee -a /etc/fstab >/dev/null", fstab_line))?;
-            println!("  ✓ /etc/fstab 등록 (재부팅 후에도 유지)");
-        }
+        let fstab_line = format!("{source} {target} cifs {options} 0 0");
+        fstab_add(target, &fstab_line)?;
     }
     Ok(())
 }
 
+fn mount_nfs(host: &str, share: &str, target: &str, persist: bool) -> anyhow::Result<()> {
+    let source = format!("{host}:{share}");
+    common::run("sudo", &["mount", "-t", "nfs", &source, target])?;
+    println!("✓ 마운트 완료");
+
+    if persist {
+        let fstab_line = format!("{source} {target} nfs _netdev,nofail 0 0");
+        fstab_add(target, &fstab_line)?;
+    }
+    Ok(())
+}
+
+fn fstab_add(target: &str, fstab_line: &str) -> anyhow::Result<()> {
+    // 이미 있으면 건너뜀 — grep -F로 고정문자열 매칭
+    let check = std::process::Command::new("grep")
+        .args(["-qF", target, "/etc/fstab"])
+        .status();
+    if check.ok().map(|s| s.success()).unwrap_or(false) {
+        println!("  ⊘ /etc/fstab에 이미 등록됨 — 건너뜀");
+        return Ok(());
+    }
+    // tempfile로 append 안전하게
+    let (tmp, _g) = secure_tempfile()?;
+    let current = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
+    let appended = if current.ends_with('\n') || current.is_empty() {
+        format!("{current}{fstab_line}\n")
+    } else {
+        format!("{current}\n{fstab_line}\n")
+    };
+    std::fs::write(&tmp, appended)?;
+    common::run("sudo", &["install", "-m", "644", "-o", "root", "-g", "root", &tmp, "/etc/fstab"])?;
+    println!("  ✓ /etc/fstab 등록 (재부팅 후에도 유지)");
+    Ok(())
+}
+
+/// mktemp 0600 + Drop 가드
+fn secure_tempfile() -> anyhow::Result<(String, TempGuard)> {
+    let out = common::run("mktemp", &["-t", "prelik.XXXXXXXX"])?;
+    let tmp = out.trim().to_string();
+    let guard = TempGuard(tmp.clone());
+    common::run("chmod", &["600", &tmp])?;
+    Ok((tmp, guard))
+}
+
+struct TempGuard(String);
+impl Drop for TempGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 fn unmount(target: &str) -> anyhow::Result<()> {
     println!("=== 마운트 해제: {target} ===");
-    common::run_bash(&format!("sudo umount {target}"))?;
-    // fstab에서 해당 라인 제거할지는 사용자 판단 — 자동 제거 안 함 (의도적 보수적)
-    let check = format!("grep -qF '{target}' /etc/fstab && echo 'warn'");
-    if common::run_bash(&check).is_ok() {
-        println!("  ⚠ /etc/fstab에 등록 있음. 영구 제거: sudo sed -i '\\|{target}|d' /etc/fstab");
+    common::run("sudo", &["umount", target])?;
+    // fstab에서 해당 라인 제거할지는 사용자 판단 — 자동 제거 안 함
+    let check = std::process::Command::new("grep")
+        .args(["-qF", target, "/etc/fstab"])
+        .status();
+    if check.ok().map(|s| s.success()).unwrap_or(false) {
+        println!("  ⚠ /etc/fstab에 등록 있음. 영구 제거: sudo sed -i \"\\|{target}|d\" /etc/fstab");
     }
     println!("✓ 해제 완료");
     Ok(())

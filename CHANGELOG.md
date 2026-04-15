@@ -2,6 +2,21 @@
 
 Semantic Versioning (https://semver.org/)
 
+## [0.12.1] - 2026-04-15
+
+### Fixed (Codex 10차 리뷰 — P1 3건)
+- **nas mount argv 방식 전환**: 모든 인자를 `Command::args()`로 직접 전달.
+  bash interpolation 제거. 공백/특수문자 포함한 경로/비밀번호도 안전.
+- **SMB 비밀번호 ps/cmdline 노출 차단**: `/etc/cifs-credentials/<host>_<share>`
+  (0600, root:root) credentials 파일로 이동. `mount -o credentials=<file>`.
+  비밀번호가 프로세스 리스트에서 더 이상 보이지 않음.
+- **/etc/fstab SMB 비밀번호 평문 차단**: fstab에는 credentials 파일 경로만
+  적힘. 로컬 사용자의 fstab 열람을 통한 NAS 자격증명 유출 방지.
+
+### Changed
+- `mount`, `umount`, `mkdir`, `install` 전부 argv 호출로 통일
+- `secure_tempfile()` + `TempGuard` Drop으로 RAII 정리 (nas 내부)
+
 ## [0.12.0] - 2026-04-15
 
 ### Added (Phase 1 완료 — 3/3)
