@@ -128,10 +128,14 @@ sudo awk '$3 == "nfs" && $4 == "_netdev,nofail" { print $2 }' /etc/fstab
 # 각 mount point에 대해:
 sudo umount /mnt/<your-prelik-nfs-mount>
 
-# 3) fstab에서 prelik NFS 라인만 제거 (awk로 필터링 후 atomic replace)
-sudo awk '!($3 == "nfs" && $4 == "_netdev,nofail")' /etc/fstab > /tmp/fstab.new
-sudo diff /etc/fstab /tmp/fstab.new   # 삭제 예정 라인 확인
-sudo cp /etc/fstab /etc/fstab.bak && sudo mv /tmp/fstab.new /etc/fstab
+# 3) fstab에서 prelik NFS 라인만 제거 (awk 필터링 + root 소유 임시파일로 atomic replace)
+#    /tmp는 다른 사용자가 symlink로 선점 가능 → root 소유 /etc에 임시파일 생성.
+TMP=$(sudo mktemp /etc/fstab.new.XXXXXX)
+sudo awk '!($3 == "nfs" && $4 == "_netdev,nofail")' /etc/fstab | sudo tee "$TMP" >/dev/null
+sudo diff /etc/fstab "$TMP"   # 삭제 예정 라인 확인
+sudo cp -p /etc/fstab /etc/fstab.bak
+sudo chown root:root "$TMP" && sudo chmod 644 "$TMP"
+sudo mv "$TMP" /etc/fstab
 
 # 4) 최종 검증
 sudo mount -a
