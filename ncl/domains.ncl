@@ -109,6 +109,13 @@ in
       provides = ["net interfaces", "net routes", "net bridges", "net dns", "net ping"],
     } | Domain,
 
+    node = {
+      name = "node",
+      description = "Proxmox 클러스터 노드 관리 (list/info/exec)",
+      tags = { product = 'infra, layer = 'remote, platform = 'proxmox },
+      provides = ["node list", "node info", "node exec"],
+    } | Domain,
+
 
 
 

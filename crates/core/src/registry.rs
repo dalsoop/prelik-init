@@ -90,6 +90,7 @@ impl Registry {
             ("iso", "Proxmox ISO 스토리지 + ISO 파일 관리", true),
             ("monitor", "호스트/LXC/VM 리소스 모니터링", true),
             ("net", "네트워크 진단 (인터페이스/라우트/브리지/DNS/ping)", true),
+            ("node", "Proxmox 클러스터 노드 관리 (list/info/exec)", true),
         ] {
             domains.insert(
                 name.to_string(),
