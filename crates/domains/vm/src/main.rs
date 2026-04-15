@@ -49,6 +49,13 @@ fn parse_qm_list(text: &str) -> anyhow::Result<Vec<VmRow>> {
             },
             _ => anyhow::bail!("qm list 라인 파싱 실패 (컬럼 {}개): {line:?}", p.len()),
         };
+        // status JSON 경로와 동일한 whitelist 계약 — drift 거부.
+        if !STATUS_KNOWN.contains(&row.status.as_str()) {
+            anyhow::bail!(
+                "qm list 행의 status가 알 수 없는 형태: {:?} (허용: {STATUS_KNOWN:?})",
+                row.status
+            );
+        }
         rows.push(row);
     }
     Ok(rows)
@@ -274,6 +281,22 @@ mod tests {
     #[test]
     fn list_only_header_returns_empty() {
         assert!(parse_qm_list("VMID NAME STATUS MEM DISK PID").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_fails_on_unknown_status() {
+        // status whitelist 위반 — qm이 'unknown'을 emit하면 (LXC 전용 fallback)
+        // VM 도메인에선 거부해야 함. status JSON 경로와 동일 계약.
+        let text = "VMID NAME STATUS MEM DISK PID\n\
+                    100 web unknown 2048 32 0\n";
+        assert!(parse_qm_list(text).is_err());
+    }
+
+    #[test]
+    fn list_fails_on_drifted_status() {
+        let text = "VMID NAME STATUS MEM DISK PID\n\
+                    100 web RUNNING 2048 32 0\n"; // 대문자
+        assert!(parse_qm_list(text).is_err());
     }
 
     // ----- parse_qm_status -----
