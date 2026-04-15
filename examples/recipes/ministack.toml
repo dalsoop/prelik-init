@@ -1,0 +1,67 @@
+[service]
+name = "ministack"
+description = "MiniStack — LocalStack 오픈 포크 (로컬 AWS 에뮬레이터)"
+
+[lxc]
+cores = "2"
+memory = "2048"
+disk = "12"
+
+[install]
+packages = ["docker.io", "docker-compose-v2", "curl"]
+
+[[install.steps]]
+name = "Docker daemon enable"
+run = "systemctl enable --now docker"
+
+[[install.steps]]
+name = "compose 생성"
+run = """
+mkdir -p /opt/ministack
+cd /opt/ministack
+PORT="${MINISTACK_PORT:-4566}"
+
+[ -f docker-compose.yml ] || cat > docker-compose.yml << YAML
+services:
+  ministack:
+    image: ministackorg/ministack:latest
+    restart: always
+    ports:
+      - "${PORT}:4566"
+      - "4571:4571"
+    environment:
+      - SERVICES=${MINISTACK_SERVICES:-s3,sqs,lambda,dynamodb}
+      - DEBUG=${MINISTACK_DEBUG:-0}
+    volumes:
+      - /opt/ministack/data:/var/lib/ministack
+YAML
+"""
+
+[[install.steps]]
+name = "compose up -d"
+run = "cd /opt/ministack && docker compose up -d"
+
+[[install.steps]]
+name = "AWS CLI 환경변수 설정 (/etc/profile.d/ministack.sh)"
+run = """
+PORT="${MINISTACK_PORT:-4566}"
+cat > /etc/profile.d/ministack.sh << SH
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_ENDPOINT_URL=http://localhost:${PORT}
+SH
+chmod 644 /etc/profile.d/ministack.sh
+"""
+
+[[install.steps]]
+name = "검증 (/_ministack/health)"
+run = """
+PORT="${MINISTACK_PORT:-4566}"
+for i in $(seq 1 60); do
+  curl -fsS http://localhost:${PORT}/_ministack/health -o /dev/null && echo "✓ ministack 동작 (:${PORT})" && exit 0
+  sleep 1
+done
+echo "✗ ministack 시작 실패 (60초 타임아웃) — docker compose logs로 확인" >&2
+exit 1
+"""

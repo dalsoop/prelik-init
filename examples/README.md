@@ -16,6 +16,8 @@
 | [recipes/uptime-kuma.toml](recipes/uptime-kuma.toml) | Uptime Kuma — 모니터링 (Docker, :3001) |
 | [recipes/formbricks.toml](recipes/formbricks.toml) | Formbricks — 설문 플랫폼 (Docker Compose, :3000) |
 | [recipes/matterbridge.toml](recipes/matterbridge.toml) | Matterbridge — 채팅 플랫폼 브릿지 (systemd) |
+| [recipes/infisical.toml](recipes/infisical.toml) | Infisical — 오픈소스 시크릿 관리 (Docker Compose, :8080) |
+| [recipes/ministack.toml](recipes/ministack.toml) | MiniStack — 로컬 AWS 에뮬레이터 (Docker, :4566) |
 
 각 예시는 **Proxmox 빈 호스트 + prelik v1.5+** 를 전제로 합니다.
 
