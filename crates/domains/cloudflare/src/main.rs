@@ -50,8 +50,14 @@ enum Audience {
 }
 
 fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    // doctor는 자체적으로 상태만 보여주는 용도 — creds 없어도 동작
+    if matches!(cli.cmd, Cmd::Doctor) {
+        doctor();
+        return Ok(());
+    }
     let (email, key) = creds()?;
-    match Cli::parse().cmd {
+    match cli.cmd {
         Cmd::DnsAdd { domain, record_type, name, content, audience, proxied } => {
             let p = match (proxied, audience) {
                 (Some(p), _) => p,
@@ -62,7 +68,7 @@ fn main() -> anyhow::Result<()> {
             dns_add(&email, &key, &domain, &record_type, &name, &content, p)
         }
         Cmd::EmailWorkerAttachAll { worker, dry_run } => worker_attach_all(&email, &key, &worker, dry_run),
-        Cmd::Doctor => { doctor(); Ok(()) }
+        Cmd::Doctor => unreachable!("Doctor는 위에서 early return"),
     }
 }
 

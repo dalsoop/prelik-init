@@ -70,8 +70,13 @@ enum Cmd {
 }
 
 fn main() -> anyhow::Result<()> {
-    require_proxmox()?;
-    match Cli::parse().cmd {
+    let cli = Cli::parse();
+    // --help/--version은 clap이 parse 중 종료. doctor는 환경 점검용이므로
+    // require_proxmox 검사 건너뜀.
+    if !matches!(cli.cmd, Cmd::Doctor) {
+        require_proxmox()?;
+    }
+    match cli.cmd {
         Cmd::List => list(),
         Cmd::Status { vmid } => status(&vmid),
         Cmd::Create {

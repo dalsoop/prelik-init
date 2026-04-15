@@ -69,10 +69,11 @@ const COMPOSE_YML: &str = "services:
 ";
 
 fn main() -> anyhow::Result<()> {
-    if !common::has_cmd("pct") {
+    let cli = Cli::parse();
+    if !matches!(cli.cmd, Cmd::Doctor) && !common::has_cmd("pct") {
         anyhow::bail!("pct 없음 — Proxmox 호스트에서만 동작");
     }
-    match Cli::parse().cmd {
+    match cli.cmd {
         Cmd::Recreate { vmid } => recreate(&vmid),
         Cmd::RouteAdd { vmid, name, domain, backend, use_cf } => route_add(&vmid, &name, &domain, &backend, use_cf),
         Cmd::RouteList { vmid } => route_list(&vmid),
