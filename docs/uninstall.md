@@ -278,7 +278,7 @@ prelik run bootstrap manifest --only gh   # 특정 도구만
                         /usr/share/keyrings/githubcli-archive-keyring.gpg,
                         ~/.config/gh/
   prelik remove --only gh 이 실제로 하는 것:
-    sudo apt remove --purge gh
+    sudo apt-get remove -y gh
     sudo rm -f /etc/apt/sources.list.d/github-cli.list \
                /usr/share/keyrings/githubcli-archive-keyring.gpg
   사용자 수동 후속 정리 (prelik이 자동 안 함):
