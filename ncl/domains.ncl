@@ -30,6 +30,14 @@ in
       provides = ["host status", "host monitor", "host ssh-keygen", "host smb-open"],
     } | Domain,
 
+    nas = {
+      name = "nas",
+      description = "NAS 마운트 관리 (SMB/CIFS + NFS)",
+      tags = { product = 'init, layer = 'platform, platform = 'debian },
+      provides = ["nas mount", "nas unmount", "nas list"],
+    } | Domain,
+
+
 
     connect = {
       name = "connect",
