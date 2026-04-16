@@ -7,7 +7,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+# 매 릴리스마다 bump. build.rs의 git describe가 없는 환경(source archive,
+# vendored, offline)에서 --version fallback 값이 됨.
+version = "1.11.1"
 edition = "2021"
 authors = ["dalsoop"]
 license = "MIT"

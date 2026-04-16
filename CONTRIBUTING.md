@@ -122,8 +122,13 @@ read-only 명령(list/status 등)에 `--json` 글로벌 플래그:
 
 메인테이너만:
 ```bash
+# 1) Cargo.toml workspace.package.version을 새 값으로 bump (예: 1.11.1 → 1.11.2)
+#    비-git 빌드(source archive/vendored)의 --version fallback 값.
+# 2) git commit + tag + push
+git add Cargo.toml
+git commit -m "release: v1.X.Y"
 git tag v1.X.Y -m "설명"
-git push origin v1.X.Y
+git push origin main v1.X.Y
 # GitHub Actions가 자동 빌드 + 릴리스 (x86_64 + aarch64)
 # install.prelik.com이 latest로 리다이렉트
 ```
