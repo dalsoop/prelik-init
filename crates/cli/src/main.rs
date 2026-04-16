@@ -103,6 +103,19 @@ fn setup() -> anyhow::Result<()> {
 fn init() -> anyhow::Result<()> {
     use dialoguer::{Confirm, Input, MultiSelect, Password};
 
+    // TTY 선행 체크 — dialoguer는 비-TTY에서 'IO error: not a terminal'로 실패.
+    // prompt 전에 실패시켜야 setup()이 /etc/prelik 등을 만들어놓은 부분 적용 상태를 회피.
+    // 비-TTY면 명확한 안내 메시지로 조기 종료 (비인터랙티브는 'prelik setup' + 'prelik install' 권장).
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        anyhow::bail!(
+            "prelik init은 인터랙티브 전용 (TTY 필요). \n\
+             비인터랙티브 환경에서는 다음을 사용하세요:\n\
+               prelik setup                        # 경로/디렉토리만 생성\n\
+               prelik install bootstrap lxc ...    # 도메인 개별 설치"
+        );
+    }
+
     println!("=== prelik 초기 세팅 ===\n");
     setup()?;
 
