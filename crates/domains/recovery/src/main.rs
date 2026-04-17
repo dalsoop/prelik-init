@@ -231,11 +231,29 @@ fn create(action: &str, node: Option<&str>, json: bool) -> anyhow::Result<()> {
         lxc_configs,
         cluster_nodes,
     };
-    fs::write(snapshot_path(&id)?, serde_json::to_string_pretty(&snap)?)?;
+    let snap_path = snapshot_path(&id)?;
+    fs::write(&snap_path, serde_json::to_string_pretty(&snap)?)?;
+    // LXC config에 시크릿(API 토큰, 비밀번호)이 포함될 수 있음 — 0600으로 보호.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&snap_path, fs::Permissions::from_mode(0o600));
+    }
     audit_log_internal(&format!("snapshot-create id={id} action={action}"))?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&snap)?);
+        // LXC config 전문은 시크릿(API 토큰, 비밀번호 등)이 포함될 수 있음.
+        // --json 출력에 config 본문 노출 금지 — CI 로그/터미널 scrollback 유출 위험.
+        // 메타데이터만 출력 (list와 동일 수준).
+        let safe = serde_json::json!({
+            "id": snap.id,
+            "created_at": snap.created_at,
+            "action": snap.action,
+            "node": snap.node,
+            "lxc_config_count": snap.lxc_configs.len(),
+            "snapshot_path": snapshot_path(&id)?.display().to_string(),
+        });
+        println!("{}", serde_json::to_string_pretty(&safe)?);
     } else {
         println!("✓ 스냅샷 생성: id={id} action={action} ({} LXC configs)", snap.lxc_configs.len());
     }
