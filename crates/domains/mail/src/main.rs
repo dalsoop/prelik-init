@@ -96,10 +96,34 @@ WantedBy=multi-user.target
 fn postfix_relay(maddy_ip: &str, port: &str) -> anyhow::Result<()> {
     println!("=== 호스트 Postfix → Maddy relay ===");
 
+    // maddy_ip/port 검증 — main.cf/sasl_passwd에 format! 삽입되므로 config injection 차단.
+    // IP(v4/v6)/hostname만 허용. ']', 개행, 공백 등이 있으면 main.cf에 추가 설정 주입 가능.
+    if !maddy_ip.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == ':' || c == '-') {
+        anyhow::bail!("maddy_ip 형식 오류: {maddy_ip:?} (IPv4/IPv6/hostname만 허용)");
+    }
+    if maddy_ip.is_empty() || maddy_ip.len() > 253 {
+        anyhow::bail!("maddy_ip가 비어 있거나 너무 김");
+    }
+    if !port.chars().all(|c| c.is_ascii_digit()) || port.is_empty() {
+        anyhow::bail!("port는 숫자만: {port:?}");
+    }
+    let port_num: u16 = port.parse()
+        .map_err(|_| anyhow::anyhow!("port 범위 초과: {port}"))?;
+    if port_num == 0 {
+        anyhow::bail!("port 0 은 유효하지 않음");
+    }
+
     let smtp_user = read_host_env("SMTP_USER");
     let smtp_pass = read_host_env("SMTP_PASSWORD");
     if smtp_user.is_empty() || smtp_pass.is_empty() {
         anyhow::bail!("/etc/prelik/.env 또는 /etc/proxmox-host-setup/.env 에 SMTP_USER/SMTP_PASSWORD 필요");
+    }
+    // SMTP user/pass에도 개행/제어문자 차단 (sasl_passwd 포맷 주입)
+    if smtp_user.contains('\n') || smtp_user.contains('\r') || smtp_user.contains('\0') {
+        anyhow::bail!("SMTP_USER에 개행/제어문자 포함");
+    }
+    if smtp_pass.contains('\n') || smtp_pass.contains('\r') || smtp_pass.contains('\0') {
+        anyhow::bail!("SMTP_PASSWORD에 개행/제어문자 포함");
     }
 
     if !fs::metadata("/etc/postfix/main.cf").is_ok() {

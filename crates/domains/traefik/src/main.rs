@@ -113,6 +113,19 @@ fn recreate(vmid: &str) -> anyhow::Result<()> {
 }
 
 fn route_add(vmid: &str, name: &str, domain: &str, backend: &str, use_cf: bool) -> anyhow::Result<()> {
+    // YAML/Traefik rule injection 차단 — format!으로 삽입되는 모든 인자 검증.
+    // name: YAML key + 파일명 → alphanumeric + - 만.
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        anyhow::bail!("라우트 이름은 [A-Za-z0-9-]만 허용: {name:?}");
+    }
+    // domain: Host(`...`) 규칙 → backtick/quote/개행이 있으면 rule injection.
+    if domain.is_empty() || !domain.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        anyhow::bail!("도메인은 [A-Za-z0-9.-]만 허용: {domain:?}");
+    }
+    // backend: url 필드 → 개행/YAML 특수문자 차단.
+    if backend.contains('\n') || backend.contains('\r') || backend.contains('"') {
+        anyhow::bail!("backend URL에 개행/따옴표 포함: {backend:?}");
+    }
     println!("=== 라우트 추가: {name} ({domain} → {backend}) ===");
     let tls_block = if use_cf {
         "      tls:\n        certResolver: cloudflare"
