@@ -7,8 +7,6 @@ members = [
 ]
 
 [workspace.package]
-# 매 릴리스마다 bump. build.rs의 git describe가 없는 환경(source archive,
-# vendored, offline)에서 --version fallback 값이 됨.
 version = "1.11.1"
 edition = "2021"
 authors = ["dalsoop"]
@@ -27,8 +25,3 @@ which = "6"
 clap_complete = "4"
 dialoguer = "0.12"
 pxi-core = { path = "crates/core" }
-
-[profile.release]
-opt-level = 3
-lto = "thin"
-strip = true

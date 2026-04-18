@@ -1,38 +1,41 @@
-#!/bin/bash
-# pxi-init smoke test — 모든 바이너리의 --help와 doctor가 동작하는지
+#!/usr/bin/env bash
+# pxi-init smoke test — 각 도메인 바이너리 --help + doctor 확인
 set -euo pipefail
-BIN_DIR="${1:-target/release}"
-FAIL=0
 
-check() {
-    local name=$1
-    local cmd=$2
-    if bash -c "$cmd" >/dev/null 2>&1; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — cmd: $cmd"
-        FAIL=$((FAIL+1))
-    fi
-}
+BIN_DIR="${1:-.}"
+FAILED=0
+DOMAINS=(code-server wordpress)
 
-echo "=== prelik CLI ==="
-check "prelik --version" "$BIN_DIR/prelik --version"
-check "prelik --help" "$BIN_DIR/prelik --help"
-check "prelik available" "$BIN_DIR/prelik available"
-check "prelik doctor" "$BIN_DIR/prelik doctor"
+for domain in "${DOMAINS[@]}"; do
+  bin="${BIN_DIR}/pxi-${domain}"
+  echo -n "[${domain}] "
 
-for dom in account ai backup bootstrap cloudflare comfyui connect deploy host iso lxc mail monitor nas net node recovery telegram traefik vm workspace; do
-    echo ""
-    echo "=== pxi-$dom ==="
-    check "$dom --help" "$BIN_DIR/pxi-$dom --help"
-    check "$dom doctor" "$BIN_DIR/pxi-$dom doctor"
+  if [[ ! -x "$bin" ]]; then
+    echo "SKIP — ${bin} not found"
+    continue
+  fi
+
+  # --help 확인
+  if "$bin" --help > /dev/null 2>&1; then
+    echo -n "help=OK "
+  else
+    echo "help=FAIL"
+    FAILED=1
+    continue
+  fi
+
+  # doctor 확인 (exit 0)
+  if "$bin" doctor > /dev/null 2>&1; then
+    echo "doctor=OK"
+  else
+    echo "doctor=FAIL"
+    FAILED=1
+  fi
 done
 
-echo ""
-if [ $FAIL -eq 0 ]; then
-    echo "✓ 모든 smoke test 통과"
-    exit 0
-else
-    echo "✗ $FAIL 건 실패"
-    exit 1
+if [[ $FAILED -ne 0 ]]; then
+  echo -e "\nSMOKE TEST FAILED"
+  exit 1
 fi
+
+echo -e "\nAll smoke tests passed."

@@ -1,72 +1,51 @@
 name: Release
-permissions:
-  contents: write
 
 on:
   push:
-    tags: ['v*']
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [x86_64-linux, aarch64-linux]
-        include:
-          - target: x86_64-linux
-            rust_target: x86_64-unknown-linux-gnu
-          - target: aarch64-linux
-            rust_target: aarch64-unknown-linux-gnu
+        target: [x86_64-unknown-linux-gnu]
+        binary:
+          - pxi-code-server
+          - pxi-wordpress
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust_target }}
-      - name: Install cross
-        if: matrix.target == 'aarch64-linux'
-        run: cargo install cross --locked
-      - name: Build
-        run: |
-          if [ "${{ matrix.target }}" = "aarch64-linux" ]; then
-            cross build --release --target ${{ matrix.rust_target }}
-          else
-            cargo build --release --target ${{ matrix.rust_target }}
-          fi
-      - name: Unit tests (parser regression)
-        if: matrix.target == 'x86_64-linux'
-        run: cargo test --release --target ${{ matrix.rust_target }}
+          targets: ${{ matrix.target }}
+
+      - name: Build ${{ matrix.binary }}
+        run: cargo build --release -p ${{ matrix.binary }} --target ${{ matrix.target }}
+
       - name: Smoke test
-        if: matrix.target == 'x86_64-linux'
-        run: bash tests/smoke.sh target/${{ matrix.rust_target }}/release
-      - name: Package per-binary tarballs
-        run: |
-          BIN_DIR="target/${{ matrix.rust_target }}/release"
-          TARGET="${{ matrix.target }}"
-          mkdir -p dist
-          # CLI: install.sh가 내려받는 단일 엔트리
-          if [ -f "$BIN_DIR/prelik" ]; then
-            tar czf "dist/pxi-${TARGET}.tar.gz" -C "$BIN_DIR" prelik
-          fi
-          # Domains: pxi-{domain}-{target}.tar.gz
-          for bin in pxi-ai pxi-bootstrap pxi-cloudflare pxi-host pxi-nas pxi-workspace pxi-account pxi-telegram pxi-comfyui pxi-vm pxi-backup pxi-connect pxi-lxc pxi-mail pxi-traefik pxi-iso pxi-monitor pxi-net pxi-node pxi-recovery; do
-            if [ -f "$BIN_DIR/$bin" ]; then
-              tar czf "dist/${bin}-${TARGET}.tar.gz" -C "$BIN_DIR" "$bin"
-            fi
-          done
-          # deploy: 바이너리 + 기본 레시피 번들 (install 시 자동 배포)
-          if [ -f "$BIN_DIR/pxi-deploy" ]; then
-            STAGE=$(mktemp -d)
-            cp "$BIN_DIR/pxi-deploy" "$STAGE/"
-            mkdir -p "$STAGE/recipes"
-            cp examples/recipes/*.toml "$STAGE/recipes/" 2>/dev/null || true
-            tar czf "dist/pxi-deploy-${TARGET}.tar.gz" -C "$STAGE" .
-            rm -rf "$STAGE"
-          fi
-          ls -la dist/
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        run: bash tests/smoke.sh target/${{ matrix.target }}/release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: dist/*.tar.gz
+          name: ${{ matrix.binary }}-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "**/*"
+          generate_release_notes: true

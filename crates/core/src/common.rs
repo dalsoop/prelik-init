@@ -1,37 +1,63 @@
-//! 공통 헬퍼
+use anyhow::{Context, Result};
 use std::process::Command;
 
-pub fn run(cmd: &str, args: &[&str]) -> anyhow::Result<String> {
-    let output = Command::new(cmd).args(args).output()?;
+/// 외부 명령 실행 — stdout/stderr 상속 (interactive)
+pub fn run(cmd: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .with_context(|| format!("{cmd} 실행 실패"))?;
+    if !status.success() {
+        anyhow::bail!("{cmd} exited with {}", status);
+    }
+    Ok(())
+}
+
+/// 외부 명령 실행 — stdout 캡처
+pub fn run_capture(cmd: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new(cmd)
+        .args(args)
+        .output()
+        .with_context(|| format!("{cmd} 실행 실패"))?;
     if !output.status.success() {
-        anyhow::bail!(
-            "{} {:?} 실패: {}",
-            cmd, args,
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{cmd} 실패: {stderr}");
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn run_bash(script: &str) -> anyhow::Result<String> {
-    run("bash", &["-c", script])
+/// 명령 존재 여부 확인
+pub fn command_exists(cmd: &str) -> bool {
+    Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
-pub fn has_cmd(name: &str) -> bool {
-    which::which(name).is_ok()
+/// pct exec 래퍼 — LXC 안에서 명령 실행 (stdout 캡처)
+pub fn pct_exec(vmid: &str, cmd_args: &[&str]) -> Result<String> {
+    let mut args = vec!["exec", vmid, "--"];
+    args.extend_from_slice(cmd_args);
+    run_capture("pct", &args)
 }
 
-/// run() 변형: 비밀이 args에 포함될 때 사용. 실패 시 argv는 메시지에 노출되지 않음.
-/// stdout/stderr는 자식이 직접 상속해서 출력 — 호출자는 결과를 받지 못하지만
-/// 자격증명이 anyhow chain에 영구 기록되는 것을 막는다.
-pub fn run_secret(cmd: &str, args: &[&str], context: &str) -> anyhow::Result<()> {
-    let status = Command::new(cmd).args(args).status()
-        .map_err(|e| anyhow::anyhow!("{cmd} spawn 실패: {e}"))?;
-    if !status.success() {
-        anyhow::bail!(
-            "{context} 실패 (exit {}). 자격증명 보호를 위해 argv는 메시지에 포함하지 않음.",
-            status.code().unwrap_or(-1)
-        );
+/// pct exec 래퍼 — stdout/stderr 상속 (interactive)
+pub fn pct_exec_passthrough(vmid: &str, cmd_args: &[&str]) -> Result<()> {
+    let mut args = vec!["exec", vmid, "--"];
+    args.extend_from_slice(cmd_args);
+    run("pct", &args)
+}
+
+/// LXC 실행 상태 확인 + 미실행 시 시작
+pub fn ensure_lxc_running(vmid: &str) -> Result<()> {
+    let status = run_capture("pct", &["status", vmid])?;
+    if !status.contains("running") {
+        run("pct", &["start", vmid])?;
+        std::thread::sleep(std::time::Duration::from_secs(3));
     }
     Ok(())
 }

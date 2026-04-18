@@ -1,14 +1,8 @@
 [package]
 name = "pxi-core"
-version.workspace = true
-edition.workspace = true
-build = "build.rs"
+version = "0.1.0"
+edition = "2021"
+license = "BUSL-1.1"
 
 [dependencies]
-serde = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }
-anyhow = { workspace = true }
-thiserror = { workspace = true }
-dirs = { workspace = true }
-which = { workspace = true }
+anyhow = "1"
