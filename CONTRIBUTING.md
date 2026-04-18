@@ -130,5 +130,5 @@ git commit -m "release: v1.X.Y"
 git tag v1.X.Y -m "설명"
 git push origin main v1.X.Y
 # GitHub Actions가 자동 빌드 + 릴리스 (x86_64 + aarch64)
-# install.prelik.com이 latest로 리다이렉트
+# install.pxi.com이 latest로 리다이렉트
 ```

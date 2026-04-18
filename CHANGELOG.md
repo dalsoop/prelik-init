@@ -1,4 +1,4 @@
-# Changelog
+# proxmox-init (pxi) Changelog
 
 Semantic Versioning (https://semver.org/)
 

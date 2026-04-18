@@ -1,6 +1,6 @@
 # 호환성 매트릭스
 
-각 도메인이 어떤 환경에서 동작하는지 표입니다. **prelik 자체는 Debian/Ubuntu x86_64/aarch64**를 지원하며, 일부 도메인은 Proxmox VE 호스트에서만 의미 있습니다.
+각 도메인이 어떤 환경에서 동작하는지 표입니다. **pxi 자체는 Debian/Ubuntu x86_64/aarch64**를 지원하며, 일부 도메인은 Proxmox VE 호스트에서만 의미 있습니다.
 
 ## 환경 레전드
 
@@ -47,7 +47,7 @@
 각 도메인의 `doctor` 명령이 현재 환경에서 필요한 도구가 있는지 점검합니다:
 
 ```bash
-prelik run <domain> doctor
+pxi run <domain> doctor
 ```
 
 모든 doctor는 누락 도구를 보고만 하고 exit 0으로 종료합니다 (CI/스크립트 안전).
