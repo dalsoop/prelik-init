@@ -38,6 +38,17 @@ pub fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// `command_exists`의 호환 alias — 레거시 코드 대응
+#[inline]
+pub fn has_cmd(cmd: &str) -> bool {
+    command_exists(cmd)
+}
+
+/// bash -lc 스크립트 실행 + stdout 캡처
+pub fn run_bash(script: &str) -> Result<String> {
+    run_capture("bash", &["-lc", script])
+}
+
 /// pct exec 래퍼 — LXC 안에서 명령 실행 (stdout 캡처)
 pub fn pct_exec(vmid: &str, cmd_args: &[&str]) -> Result<String> {
     let mut args = vec!["exec", vmid, "--"];
@@ -60,4 +71,10 @@ pub fn ensure_lxc_running(vmid: &str) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
     Ok(())
+}
+
+/// `run_capture`의 간편 별칭 — 레거시 코드가 `common::run(...).trim()` 형태로 사용하던 패턴 복원
+#[inline]
+pub fn run_str(cmd: &str, args: &[&str]) -> Result<String> {
+    run_capture(cmd, args)
 }
