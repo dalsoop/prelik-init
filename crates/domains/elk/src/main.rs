@@ -135,24 +135,118 @@ fn main() -> anyhow::Result<()> {
                         "systemctl restart elasticsearch kibana logstash && \
                          sleep 5 && systemctl is-active elasticsearch kibana logstash"]);
         }
-        Cmd::Install { vmid } => {
-            println!("ELK 설치는 control-plane 레시피를 사용하세요:");
-            println!("  cat /root/control-plane/services/elk.toml");
-            println!("  대상 LXC: {}", vmid);
-        }
+        Cmd::Install { vmid } => { install(&vmid)?; }
         Cmd::Doctor => { doctor(); }
     }
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// doctor
+// install — ELK 초기 설정 (encryption keys, locale, traefik)
+// ---------------------------------------------------------------------------
+
+fn install(vmid: &str) -> anyhow::Result<()> {
+    println!("=== ELK 초기 설정 (LXC {vmid}) ===\n");
+
+    // 1. Kibana encryption keys
+    println!("[1/4] Kibana encryption keys");
+    let check_key = pct_exec(vmid, "grep -q 'xpack.encryptedSavedObjects.encryptionKey' /etc/kibana/kibana.yml && echo exists");
+    if check_key.trim() == "exists" {
+        println!("  이미 설정됨");
+    } else {
+        let script = r#"
+KEY1=$(openssl rand -hex 16)
+KEY2=$(openssl rand -hex 16)
+KEY3=$(openssl rand -hex 16)
+echo "xpack.encryptedSavedObjects.encryptionKey: \"$KEY1\"" >> /etc/kibana/kibana.yml
+echo "xpack.security.encryptionKey: \"$KEY2\"" >> /etc/kibana/kibana.yml
+echo "xpack.reporting.encryptionKey: \"$KEY3\"" >> /etc/kibana/kibana.yml
+echo done
+"#;
+        pct_exec(vmid, script);
+        println!("  ✓ 3개 키 생성 완료");
+    }
+
+    // 2. Kibana locale (ko-KR)
+    println!("[2/4] Kibana 한국어 설정");
+    let has_ko = pct_exec(vmid, "test -f /usr/share/kibana/node_modules/@kbn/translations-plugin/translations/ko-KR.json && echo yes");
+    if has_ko.trim() == "yes" {
+        println!("  ko-KR.json 이미 존재");
+    } else {
+        println!("  ⚠ ko-KR.json 없음 — homelab-i18n/kibana/deploy.sh 실행 필요");
+    }
+
+    // locale 설정
+    let locale_set = pct_exec(vmid, "grep -q '^i18n.locale' /etc/kibana/kibana.yml && echo yes");
+    if locale_set.trim() != "yes" {
+        pct_exec(vmid, "sed -i 's/#i18n.locale:.*/i18n.locale: \"ko-KR\"/' /etc/kibana/kibana.yml");
+        println!("  ✓ i18n.locale: ko-KR 설정");
+    } else {
+        println!("  이미 설정됨");
+    }
+
+    // supportedLocale에 ko-KR 추가
+    let has_supported = pct_exec(vmid, "grep -q 'ko-KR' /usr/share/kibana/node_modules/@kbn/core-i18n-server-internal/src/constants.js 2>/dev/null && echo yes");
+    if has_supported.trim() != "yes" && has_ko.trim() == "yes" {
+        pct_exec(vmid, r#"sed -i "s/\(supportedLocale.*\)\]/\1, 'ko-KR']/" /usr/share/kibana/node_modules/@kbn/core-i18n-server-internal/src/constants.js"#);
+        println!("  ✓ supportedLocale에 ko-KR 추가");
+        // x-pack/.i18nrc.json 등록
+        pct_exec(vmid, r#"python3 -c "
+import json
+with open('/usr/share/kibana/x-pack/.i18nrc.json') as f: data = json.load(f)
+entry = '@kbn/translations-plugin/translations/ko-KR.json'
+if entry not in data.get('translations', []):
+    data.setdefault('translations', []).append(entry)
+    with open('/usr/share/kibana/x-pack/.i18nrc.json', 'w') as f: json.dump(data, f, indent=2)
+""#);
+        println!("  ✓ x-pack/.i18nrc.json 등록");
+    }
+
+    // 3. Traefik 라우트
+    println!("[3/4] Traefik 라우트");
+    let route_ok = Command::new("bash")
+        .args(["-c", "curl -sf --max-time 3 -o /dev/null -w '%{http_code}' https://elk.50.internal.kr/ 2>/dev/null"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("302") || String::from_utf8_lossy(&o.stdout).contains("200"))
+        .unwrap_or(false);
+    if route_ok {
+        println!("  ✓ elk.50.internal.kr 접근 가능");
+    } else {
+        println!("  라우트 추가 중...");
+        common::run("pxi", &["run", "traefik", "add",
+            "--name", "elk",
+            "--domain", "elk.50.internal.kr",
+            "--backend", &format!("http://{}:5601", ELK_IP)]);
+        println!("  ✓ 라우트 추가됨");
+    }
+
+    // 4. 재시작
+    println!("[4/4] Kibana 재시작");
+    common::run("pct", &["exec", vmid, "--", "systemctl", "restart", "kibana"]);
+    println!("  ✓ 재시작 완료 (1-2분 후 접속 가능)");
+
+    println!("\n=== 완료 ===");
+    println!("  URL: https://elk.50.internal.kr");
+    println!("  진단: pxi run elk doctor");
+    Ok(())
+}
+
+fn pct_exec(vmid: &str, script: &str) -> String {
+    Command::new("pct")
+        .args(["exec", vmid, "--", "bash", "-c", script])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// doctor — ELK 스택 진단 (서비스 + 설정 체크)
 // ---------------------------------------------------------------------------
 
 fn doctor() {
     println!("=== pxi-elk doctor ===\n");
 
-    // Elasticsearch reachable
+    // 1. Elasticsearch reachable
     let es_ok = Command::new("curl")
         .args(["-sf", "--max-time", "5", &format!("http://{}:9200", ELK_IP)])
         .output()
@@ -160,7 +254,7 @@ fn doctor() {
         .unwrap_or(false);
     println!("  {} Elasticsearch ({}:9200)", if es_ok { "✓" } else { "✗" }, ELK_IP);
 
-    // Kibana reachable
+    // 2. Kibana reachable
     let kibana_ok = Command::new("curl")
         .args(["-sf", "--max-time", "5", &format!("http://{}:5601/api/status", ELK_IP)])
         .output()
@@ -168,7 +262,7 @@ fn doctor() {
         .unwrap_or(false);
     println!("  {} Kibana ({}:5601)", if kibana_ok { "✓" } else { "✗" }, ELK_IP);
 
-    // Logstash running
+    // 3. Logstash running
     let logstash_ok = Command::new("pct")
         .args(["exec", ELK_VMID, "--", "systemctl", "is-active", "logstash"])
         .output()
@@ -176,7 +270,7 @@ fn doctor() {
         .unwrap_or(false);
     println!("  {} Logstash (systemctl)", if logstash_ok { "✓" } else { "✗" });
 
-    // syslog-* index count
+    // 4. syslog-* index count
     let idx_output = Command::new("curl")
         .args(["-sf", "--max-time", "5", &format!("http://{}:9200/_cat/indices/syslog-*?h=index", ELK_IP)])
         .output();
@@ -188,4 +282,29 @@ fn doctor() {
         }
         _ => println!("  ✗ syslog-* 인덱스 조회 실패"),
     }
+
+    // 5. Encryption keys
+    let enc_ok = pct_exec(ELK_VMID, "grep -q 'xpack.encryptedSavedObjects.encryptionKey' /etc/kibana/kibana.yml && echo yes");
+    println!("  {} encryption keys", if enc_ok.trim() == "yes" { "✓" } else { "✗ 누락 — `pxi run elk install` 실행" });
+
+    // 6. Locale
+    let locale = pct_exec(ELK_VMID, "grep '^i18n.locale' /etc/kibana/kibana.yml 2>/dev/null | head -1");
+    let locale = locale.trim();
+    if locale.is_empty() {
+        println!("  ✗ i18n.locale 미설정 (기본 영어)");
+    } else {
+        println!("  ✓ {}", locale);
+    }
+
+    // 7. ko-KR translation file
+    let ko_exists = pct_exec(ELK_VMID, "test -f /usr/share/kibana/node_modules/@kbn/translations-plugin/translations/ko-KR.json && echo yes");
+    println!("  {} ko-KR.json", if ko_exists.trim() == "yes" { "✓" } else { "✗ 없음 — homelab-i18n/kibana/deploy.sh" });
+
+    // 8. Traefik route
+    let route_ok = Command::new("bash")
+        .args(["-c", "curl -sf --max-time 3 -o /dev/null https://elk.50.internal.kr/ 2>/dev/null"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    println!("  {} Traefik 라우트 (elk.50.internal.kr)", if route_ok { "✓" } else { "✗" });
 }
