@@ -216,6 +216,27 @@ systemctl daemon-reload
 systemctl enable xpra-xdesktop.service
 systemctl restart xpra-xdesktop.service
 
+# Xpra HTML5 기본 index.html → 자동접속 리다이렉터.
+# 원본 폼에 비어있는 password 필드가 있어 UX가 혼란 → autoconnect=true 로 바로 연결.
+# 서버 쪽 auth 는 이미 비활성 (--tcp-auth 없음) 이라 실제 인증은 필요 없음.
+if [ -f /usr/share/xpra/www/index.html ] && [ ! -f /usr/share/xpra/www/index.html.orig ]; then
+  cp /usr/share/xpra/www/index.html /usr/share/xpra/www/index.html.orig
+fi
+cat > /usr/share/xpra/www/index.html <<'HTML_INDEX'
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>xdesktop</title>
+  <meta http-equiv="refresh" content="0; url=/connect.html?autoconnect=true&password=&username=&server=">
+  <script>location.replace("/connect.html?autoconnect=true&password=&username=&server=" + encodeURIComponent(location.host));</script>
+</head>
+<body>
+  <p>연결 중…</p>
+</body>
+</html>
+HTML_INDEX
+
 # 기동 대기
 sleep 3
 systemctl --no-pager --lines=8 status xpra-xdesktop.service || true
