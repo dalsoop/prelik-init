@@ -173,18 +173,96 @@ fn install(vmid: &str, port: &str, user: &str, helium_tag: &str) -> anyhow::Resu
 }
 
 fn expose(vmid: &str, host: &str, port: &str) -> anyhow::Result<()> {
-    // 50.internal.kr 규약 따름. pxi run service add 로 traefik 서비스 등록.
+    // 1) 기본 레지스트리 등록 (pxi run service list 에 노출 + traefik 기본 yml 생성)
     let domain = host.splitn(2, '.').nth(1).unwrap_or("50.internal.kr");
+    let ip = lxc_ip(vmid)?;
     common::run("pxi-service", &[
         "add",
         "--domain", domain,
         "--name", &format!("xdesktop-{vmid}"),
         "--host", host,
-        "--ip", &lxc_ip(vmid)?,
+        "--ip", &ip,
         "--port", port,
         "--vmid", vmid,
     ])?;
+
+    // 2) Xpra 전용 traefik config 로 덮어쓰기.
+    //
+    // Xpra Python HTTP 서버는 HTTP/1.0 으로 응답 → 응답 직후 backend conn 닫힘.
+    // traefik 기본 동작(keep-alive pool 재사용)이면 죽은 conn 재사용 시도 → 502.
+    // serversTransport 로 backend conn 재사용 끄고, retry middleware 로 과도기 실패 흡수.
+    let traefik_vmid = traefik_vmid().unwrap_or_else(|| "50100".to_string());
+    let route_path = format!("/opt/traefik/dynamic/xdesktop-{vmid}.yml");
+    let yaml = format!(
+        "# managed-by: pxi-xdesktop (Xpra HTTP/1.0 backend 전용 — expose 서브커맨드가 생성)
+http:
+  routers:
+    xdesktop-{vmid}:
+      rule: \"Host(`{host}`)\"
+      entryPoints:
+        - websecure
+      service: xdesktop-{vmid}
+      middlewares:
+        - xdesktop-{vmid}-retry
+      tls:
+        certResolver: cloudflare
+    xdesktop-{vmid}-http:
+      rule: \"Host(`{host}`)\"
+      entryPoints:
+        - web
+      service: xdesktop-{vmid}
+      middlewares:
+        - xdesktop-{vmid}-retry
+
+  middlewares:
+    xdesktop-{vmid}-retry:
+      retry:
+        attempts: 4
+        initialInterval: 50ms
+
+  services:
+    xdesktop-{vmid}:
+      loadBalancer:
+        serversTransport: xdesktop-{vmid}-transport
+        servers:
+          - url: \"http://{ip}:{port}\"
+
+  serversTransports:
+    xdesktop-{vmid}-transport:
+      maxIdleConnsPerHost: 0
+      disableHTTP2: true
+      forwardingTimeouts:
+        dialTimeout: 5s
+        responseHeaderTimeout: 30s
+"
+    );
+
+    // tempfile → pct push → 덮어쓰기. traefik 은 dynamic 폴더 watch 로 자동 reload.
+    let out = common::run_capture("mktemp", &["-t", "pxi-xdesktop.XXXXXXXX"])?;
+    let tmp = out.trim().to_string();
+    let _guard = TempGuard(tmp.clone());
+    std::fs::write(&tmp, yaml)?;
+    common::run("pct", &["push", &traefik_vmid, &tmp, &route_path])?;
+
+    println!("  ✓ traefik xdesktop-{vmid}.yml 덮어씀 (Xpra 전용 retry + no-keepalive)");
     Ok(())
+}
+
+/// traefik LXC VMID 조회. `pxi run traefik host --json` 있으면 쓰고,
+/// 없으면 hostname=traefik 인 running LXC 를 스캔.
+fn traefik_vmid() -> Option<String> {
+    let out = common::run_capture("pct", &["list"]).ok()?;
+    for line in out.lines().skip(1) {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() >= 3 && cols[1] == "running" {
+            if let Some(name) = cols.get(2) {
+                if *name == "traefik" {
+                    return Some(cols[0].to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn status(vmid: &str) -> anyhow::Result<()> {
