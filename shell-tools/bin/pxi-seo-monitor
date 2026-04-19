@@ -354,7 +354,104 @@ cmd_geo_stats() {
 
 cmd_geo_providers() {
   require_up
-  artisan "tinker --execute='\$s = app(\\App\\Services\\GeoOutcome\\Service::class); foreach (\$s->availableProviders() as \$k => \$v) { echo \$k.\": \".(\$v ? \"READY\" : \"missing API key\").PHP_EOL; }'"
+  artisan "tinker --execute='\$s = app(\\App\\Services\\GeoOutcome\\Service::class); foreach (\$s->availableProviders() as \$k => \$v) { echo \$k.\": \".(\$v ? \"READY\" : \"missing API key\").PHP_EOL; } echo \"claude: READY (manual submit)\".PHP_EOL;'"
+}
+
+cmd_geo_pending() {
+  require_up
+  local site_id="" provider="claude" since="7" json="" remind=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --provider)   provider="$2"; shift 2 ;;
+      --provider=*) provider="${1#*=}"; shift ;;
+      --since)      since="$2"; shift 2 ;;
+      --since=*)    since="${1#*=}"; shift ;;
+      --json)       json="--json"; shift ;;
+      --remind)     remind="--remind"; shift ;;
+      *)            site_id="$1"; shift ;;
+    esac
+  done
+  local args="$site_id --provider=$provider --since=$since"
+  [[ -n "$json"   ]] && args="$args --json"
+  [[ -n "$remind" ]] && args="$args --remind"
+  artisan "seo:geo-pending $args"
+}
+
+cmd_geo_submit() {
+  require_up
+  local query_id="" site_id="" text="" response="" resp_file="" citations="" cit_file="" provider="claude" model="" tokens="" json="" stdin=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --query-id|--query-id=*)   [[ "$1" == *=* ]] && query_id="${1#*=}" || { query_id="$2"; shift; }; shift ;;
+      --site-id|--site-id=*)     [[ "$1" == *=* ]] && site_id="${1#*=}"  || { site_id="$2";  shift; }; shift ;;
+      --text|--text=*)           [[ "$1" == *=* ]] && text="${1#*=}"     || { text="$2";     shift; }; shift ;;
+      --response|--response=*)   [[ "$1" == *=* ]] && response="${1#*=}" || { response="$2"; shift; }; shift ;;
+      --response-file|--response-file=*) [[ "$1" == *=* ]] && resp_file="${1#*=}" || { resp_file="$2"; shift; }; shift ;;
+      --response-stdin)          stdin="1"; shift ;;
+      --citations|--citations=*) [[ "$1" == *=* ]] && citations="${1#*=}" || { citations="$2"; shift; }; shift ;;
+      --citations-file|--citations-file=*) [[ "$1" == *=* ]] && cit_file="${1#*=}" || { cit_file="$2"; shift; }; shift ;;
+      --provider|--provider=*)   [[ "$1" == *=* ]] && provider="${1#*=}" || { provider="$2"; shift; }; shift ;;
+      --model|--model=*)         [[ "$1" == *=* ]] && model="${1#*=}"    || { model="$2";    shift; }; shift ;;
+      --tokens|--tokens=*)       [[ "$1" == *=* ]] && tokens="${1#*=}"   || { tokens="$2";   shift; }; shift ;;
+      --json)                    json="--json"; shift ;;
+      *) die "알 수 없는 옵션: $1" ;;
+    esac
+  done
+
+  # response-file / citations-file 은 LXC 내부에서 읽히므로, 호스트→LXC로 복사
+  local lxc_resp="" lxc_cit=""
+  if [[ -n "$resp_file" ]]; then
+    [[ -r "$resp_file" ]] || die "응답 파일 없음: $resp_file"
+    lxc_resp="/tmp/geo-resp-$$.txt"
+    pct push "$VMID" "$resp_file" "$lxc_resp"
+  fi
+  if [[ -n "$cit_file" ]]; then
+    [[ -r "$cit_file" ]] || die "citation 파일 없음: $cit_file"
+    lxc_cit="/tmp/geo-cit-$$.txt"
+    pct push "$VMID" "$cit_file" "$lxc_cit"
+  fi
+
+  # stdin은 호스트에서 받아 파일로 저장 후 LXC로 전달
+  if [[ -n "$stdin" ]]; then
+    local tmp="/tmp/geo-resp-stdin-$$.txt"
+    cat > "$tmp"
+    lxc_resp="/tmp/geo-resp-$$.txt"
+    pct push "$VMID" "$tmp" "$lxc_resp"
+    rm -f "$tmp"
+  fi
+
+  # 텍스트 옵션은 안전하게 Base64로 전달 (셸 따옴표 지옥 회피)
+  local args=""
+  [[ -n "$query_id" ]] && args="$args --query-id=$query_id"
+  [[ -n "$site_id"  ]] && args="$args --site-id=$site_id"
+  [[ -n "$provider" ]] && args="$args --provider=$provider"
+  [[ -n "$model"    ]] && args="$args --model=$model"
+  [[ -n "$tokens"   ]] && args="$args --tokens=$tokens"
+  [[ -n "$json"     ]] && args="$args --json"
+  [[ -n "$lxc_resp" ]] && args="$args --response-file=$lxc_resp"
+  [[ -n "$lxc_cit"  ]] && args="$args --citations-file=$lxc_cit"
+
+  # 인라인 텍스트는 base64 인코딩 후 LXC에서 디코드하도록 wrapper 작성
+  local b64_text="" b64_resp="" b64_cit=""
+  [[ -n "$text"      ]] && b64_text=$(printf '%s' "$text"      | base64 -w0)
+  [[ -n "$response"  ]] && b64_resp=$(printf '%s' "$response"  | base64 -w0)
+  [[ -n "$citations" ]] && b64_cit=$(printf '%s' "$citations"  | base64 -w0)
+
+  local wrap="cd $APP_ROOT && "
+  [[ -n "$b64_text" ]] && wrap+="TEXT=\$(echo $b64_text | base64 -d) && "
+  [[ -n "$b64_resp" ]] && wrap+="RESP=\$(echo $b64_resp | base64 -d) && "
+  [[ -n "$b64_cit"  ]] && wrap+="CIT=\$(echo $b64_cit  | base64 -d) && "
+
+  local extra=""
+  [[ -n "$b64_text" ]] && extra+=" --text=\"\$TEXT\""
+  [[ -n "$b64_resp" ]] && extra+=" --response=\"\$RESP\""
+  [[ -n "$b64_cit"  ]] && extra+=" --citations=\"\$CIT\""
+
+  wrap+="php artisan seo:geo-submit${args}${extra}"
+  in_lxc "$wrap"
+
+  [[ -n "$lxc_resp" ]] && in_lxc "rm -f $lxc_resp" || true
+  [[ -n "$lxc_cit"  ]] && in_lxc "rm -f $lxc_cit"  || true
 }
 
 # ── 테스트 ──────────────────────────────────────────────────────────────────
@@ -664,6 +761,9 @@ Usage:
   pxi-seo-monitor geo-outcome queries seed <site_id> [--limit N]   # 분석 기반 자동 제안
   pxi-seo-monitor geo-outcome queries clear <site_id>
   pxi-seo-monitor geo-outcome run [site_id] [--provider=openai|perplexity|all] [--query=ID | --text="..."]
+  pxi-seo-monitor geo-outcome pending [site_id] [--provider claude] [--since 7] [--json] [--remind]
+  pxi-seo-monitor geo-outcome submit --query-id=N --response="..." [--citations="url1 url2"]
+  pxi-seo-monitor geo-outcome submit --site-id=N --text="..." --response-stdin < answer.txt
   pxi-seo-monitor geo-outcome stats [site_id] [--days 30] [--list --limit 50]
 
   pxi-seo-monitor schedule install                  # Laravel schedule:work systemd 등록
@@ -790,6 +890,8 @@ main() {
         run)        cmd_geo_run "$@" ;;
         stats)      cmd_geo_stats "$@" ;;
         providers)  cmd_geo_providers ;;
+        pending)    cmd_geo_pending "$@" ;;
+        submit)     cmd_geo_submit "$@" ;;
         queries)
           local sub2="${1:-list}"; shift || true
           case "$sub2" in
