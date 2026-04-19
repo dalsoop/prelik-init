@@ -169,6 +169,19 @@ cmd_sites_import_wp() {
 cmd_analyze() { require_up; artisan "seo:analyze ${1:-}"; }
 cmd_report()  { require_up; artisan "seo:report  ${1:-}"; }
 
+cmd_analyze_pages() {
+  require_up
+  local site_id="" limit="5" inc=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --limit)            limit="$2"; shift 2 ;;
+      --include-homepage) inc="--include-homepage"; shift ;;
+      *)                  site_id="$1"; shift ;;
+    esac
+  done
+  artisan "seo:analyze-pages $site_id --limit=$limit $inc"
+}
+
 # ── 크롤러 (Guzzle BFS — pages 테이블 적재) ─────────────────────────────────
 cmd_crawl() {
   require_up
@@ -519,8 +532,9 @@ Usage:
   pxi-seo-monitor hints list [site_id] [--severity critical|warning|info] [--analyzer meta|...] [--top N]
   pxi-seo-monitor hints materialize [site_id]      # 기존 analyses 에서 hints 재추출
   pxi-seo-monitor hints clear <site_id>
-  pxi-seo-monitor analyze  [site_id]               # seo:analyze (전체 | 특정)
-  pxi-seo-monitor report   [site_id]               # seo:report
+  pxi-seo-monitor analyze       [site_id]               # seo:analyze 홈 (전체 | 특정)
+  pxi-seo-monitor analyze-pages [site_id] [--limit N] [--include-homepage]  # 페이지 단위 분석 (page_id 연결 hints)
+  pxi-seo-monitor report        [site_id]               # seo:report
 
   pxi-seo-monitor playwright status
   pxi-seo-monitor playwright logs [lines]
@@ -627,8 +641,9 @@ main() {
       ;;
     bootstrap) cmd_bootstrap ;;
     test)      cmd_test "$@" ;;
-    analyze)  cmd_analyze "$@" ;;
-    report)   cmd_report "$@" ;;
+    analyze)       cmd_analyze "$@" ;;
+    analyze-pages) cmd_analyze_pages "$@" ;;
+    report)        cmd_report "$@" ;;
     crawl)    cmd_crawl "$@" ;;
     pages)
       local sub="${1:-list}"; shift || true
