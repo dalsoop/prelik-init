@@ -366,6 +366,55 @@ cmd_links_graph() {
     }\""
 }
 
+# ── Alerts / Diff ───────────────────────────────────────────────────────────
+cmd_alert_test() {
+  require_up
+  local msg="Test from prelik-seo-monitor ($(date +%H:%M))"
+  [[ "${1:-}" != "" ]] && msg="$1"
+  local b64; b64=$(printf '%s' "$msg" | base64 -w0)
+  in_lxc "cd $APP_ROOT && MSG=\$(echo $b64 | base64 -d) && php artisan seo:alert-test --message=\"\$MSG\""
+}
+
+cmd_alert_recent() {
+  require_up
+  local site_id="" days="7" limit="50" rule="" sev=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --days|--days=*)       [[ "$1" == *=* ]] && days="${1#*=}"  || { days="$2";  shift; }; shift ;;
+      --limit|--limit=*)     [[ "$1" == *=* ]] && limit="${1#*=}" || { limit="$2"; shift; }; shift ;;
+      --rule|--rule=*)       [[ "$1" == *=* ]] && rule="${1#*=}"  || { rule="$2";  shift; }; shift ;;
+      --severity|--severity=*) [[ "$1" == *=* ]] && sev="${1#*=}" || { sev="$2";   shift; }; shift ;;
+      *) site_id="$1"; shift ;;
+    esac
+  done
+  local args="$site_id --days=$days --limit=$limit"
+  [[ -n "$rule" ]] && args="$args --rule=$rule"
+  [[ -n "$sev"  ]] && args="$args --severity=$sev"
+  artisan "seo:alert-recent $args"
+}
+
+cmd_diff_show() {
+  require_up
+  local aid="" site_id=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --site|--site=*) [[ "$1" == *=* ]] && site_id="${1#*=}" || { site_id="$2"; shift; }; shift ;;
+      *) aid="$1"; shift ;;
+    esac
+  done
+  local args="$aid"
+  [[ -n "$site_id" ]] && args="$args --site=$site_id"
+  artisan "seo:diff-show $args"
+}
+
+cmd_alert_channels() {
+  require_up
+  artisan "tinker --execute='
+    \$tg = app(\\App\\Services\\Alert\\TelegramChannel::class);
+    echo \"telegram: \".(\$tg->isConfigured() ? \"READY\" : \"missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID\").PHP_EOL;
+  '"
+}
+
 # ── Competitors ─────────────────────────────────────────────────────────────
 cmd_competitors_list()    { require_up; artisan "seo:competitors list ${1:-}"; }
 cmd_competitors_add() {
@@ -1048,6 +1097,11 @@ Usage:
   pxi-seo-monitor tests results [domain]            # NAS 아티팩트 목록
   pxi-seo-monitor tests report <domain>             # html-report 서빙
 
+  pxi-seo-monitor alert channels                                # 채널 설정 상태 (telegram 등)
+  pxi-seo-monitor alert test ["메시지"]                          # 테스트 메시지 발송
+  pxi-seo-monitor alert recent [site_id] [--days N] [--rule X] [--severity critical|warning|info]
+  pxi-seo-monitor diff [analysis_id] [--site N]                  # 분석 간 변화 상세
+
   pxi-seo-monitor competitors list [parent_site_id]
   pxi-seo-monitor competitors add <parent_site_id> --url <url> [--name <name>]
   pxi-seo-monitor competitors remove <competitor_id>
@@ -1199,6 +1253,17 @@ main() {
         *) usage; die "알 수 없는 hints 서브커맨드: $sub" ;;
       esac
       ;;
+    alert)
+      local sub="${1:-recent}"; shift || true
+      case "$sub" in
+        test)      cmd_alert_test "$@" ;;
+        recent)    cmd_alert_recent "$@" ;;
+        channels)  cmd_alert_channels ;;
+        *) usage; die "알 수 없는 alert 서브커맨드: $sub" ;;
+      esac
+      ;;
+    diff)
+      cmd_diff_show "$@" ;;
     competitors|comp)
       local sub="${1:-list}"; shift || true
       case "$sub" in
