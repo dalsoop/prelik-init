@@ -62,6 +62,9 @@ apt-get install -y --no-install-recommends \
   fonts-noto-core fonts-noto-mono \
   fonts-nanum fonts-nanum-extra
 
+# 커서 테마 — Xvfb 는 기본 커서가 안 보이므로 Adwaita(또는 DMZ) 명시 지정 필요
+apt-get install -y --no-install-recommends dmz-cursor-theme xcursor-themes
+
 step 5/9 "fcitx5 + 한글 입력기"
 apt-get install -y --no-install-recommends \
   fcitx5 fcitx5-hangul fcitx5-configtool \
@@ -260,6 +263,36 @@ WM_XML
 
 # 이전 설치의 launcher-*/ 잔재 정리 (시스템 .desktop 참조로 통일했으므로 불필요)
 rm -rf "$USER_HOME/.config/xfce4/panel/launcher-"* 2>/dev/null || true
+
+# 커서 테마 xsettings + Xresources — Xvfb 기본 커서 안 보이는 문제 해결
+cat > "$PANEL_DIR/xsettings.xml" <<'XSETTINGS_XML'
+<?xml version="1.1" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="Adwaita-dark"/>
+    <property name="IconThemeName" type="string" value="Adwaita"/>
+    <property name="DoubleClickTime" type="int" value="400"/>
+  </property>
+  <property name="Gtk" type="empty">
+    <property name="CursorThemeName" type="string" value="Adwaita"/>
+    <property name="CursorThemeSize" type="int" value="24"/>
+    <property name="FontName" type="string" value="Noto Sans CJK KR 10"/>
+    <property name="MonospaceFontName" type="string" value="Nanum Gothic Coding 10"/>
+  </property>
+</channel>
+XSETTINGS_XML
+
+# 세션 시작 시 커서 즉시 적용 (xfce 가 xsettings 못 먹이는 edge case 대비)
+cat > "$USER_HOME/.Xresources" <<'XRES'
+Xcursor.theme: Adwaita
+Xcursor.size: 24
+XRES
+if ! grep -q "Xcursor" "$USER_HOME/.xprofile" 2>/dev/null; then
+  cat >> "$USER_HOME/.xprofile" <<'XPROF_CURSOR'
+xrdb -merge "$HOME/.Xresources" 2>/dev/null
+xsetroot -cursor_name left_ptr 2>/dev/null
+XPROF_CURSOR
+fi
 
 chown -R "$XDESKTOP_USER:$XDESKTOP_USER" "$USER_HOME/Desktop" "$USER_HOME/.config"
 
