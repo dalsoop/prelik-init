@@ -10,7 +10,47 @@ pub struct Config {
     pub proxmox: ProxmoxConfig,
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub lxc: LxcConfig,
 }
+
+/// LXC 생성 기본값. `pxi run lxc create` 가 default_value 하드코딩 대신 여기서 로드.
+/// 도메인별 override 가 필요한 쪽 (xdesktop 무거움, wordpress MariaDB 등) 은 자기 기본값 유지.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LxcConfig {
+    #[serde(default = "default_cores")]
+    pub cores: String,
+    #[serde(default = "default_memory")]
+    pub memory: String,
+    #[serde(default = "default_disk")]
+    pub disk: String,
+    #[serde(default = "default_template")]
+    pub template: String,
+    #[serde(default = "default_storage")]
+    pub storage: String,
+    #[serde(default = "default_bridge")]
+    pub bridge: String,
+}
+
+impl Default for LxcConfig {
+    fn default() -> Self {
+        Self {
+            cores: default_cores(),
+            memory: default_memory(),
+            disk: default_disk(),
+            template: default_template(),
+            storage: default_storage(),
+            bridge: default_bridge(),
+        }
+    }
+}
+
+fn default_cores() -> String { "2".into() }
+fn default_memory() -> String { "2048".into() }
+fn default_disk() -> String { "8".into() }
+fn default_template() -> String { "debian-13".into() }
+fn default_storage() -> String { "local-lvm".into() }
+fn default_bridge() -> String { "vmbr1".into() }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProxmoxConfig {
