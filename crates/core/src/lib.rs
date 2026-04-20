@@ -2,6 +2,7 @@ pub mod brand;
 pub mod common;
 pub mod config;
 pub mod convention;
+pub mod helpers;
 pub mod os;
 pub mod registry;
 pub mod services;

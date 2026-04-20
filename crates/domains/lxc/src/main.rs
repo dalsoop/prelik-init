@@ -41,10 +41,10 @@ enum Cmd {
     List,
     /// LXC 상태
     Status { vmid: String },
-    /// LXC 생성
+    /// LXC 생성 (VMID 규약 강제 — Vmid newtype)
     Create {
         #[arg(long)]
-        vmid: String,
+        vmid: pxi_core::types::Vmid,
         #[arg(long)]
         hostname: String,
         /// IP (CIDR 포함 가능, 예: 10.0.50.181/16)
@@ -239,7 +239,7 @@ fn main() -> anyhow::Result<()> {
             memory,
             gateway,
             bridge,
-        } => create(&vmid, &hostname, &ip, &template, &storage, &disk, &cores, &memory, gateway.as_deref(), &bridge),
+        } => create(vmid.as_str(), &hostname, &ip, &template, &storage, &disk, &cores, &memory, gateway.as_deref(), &bridge),
         Cmd::Start { vmid } => start(&vmid),
         Cmd::Stop { vmid } => stop(&vmid),
         Cmd::Restart { vmid } => restart(&vmid),
@@ -306,7 +306,8 @@ fn ensure_lxc_exists(vmid: &str) -> String {
 
 fn ensure_lxc_running(vmid: &str) {
     let status = ensure_lxc_exists(vmid);
-    if !status.contains("running") {
+    let parsed: pxi_core::types::LxcStatus = status.parse().unwrap();
+    if !parsed.is_running() {
         eprintln!("[lxc] LXC {vmid} 이 실행 중이 아닙니다 (현재: {status})");
         std::process::exit(1);
     }
@@ -739,7 +740,8 @@ fn restart(vmid: &str) -> anyhow::Result<()> {
 
 fn delete(vmid: &str, force: bool) -> anyhow::Result<()> {
     let status = common::run_str("pct", &["status", vmid]).unwrap_or_default();
-    if status.contains("running") {
+    let parsed: pxi_core::types::LxcStatus = status.parse().unwrap();
+    if parsed.is_running() {
         common::run_str("pct", &["stop", vmid])?;
     }
     if !force {
@@ -776,7 +778,8 @@ fn config(vmid: &str) -> anyhow::Result<()> {
     let status_out = ensure_lxc_exists(vmid);
     let output = cmd_output("pct", &["config", vmid]);
     println!("=== LXC {vmid} 설정 ===\n");
-    let state = if status_out.contains("running") { "running" } else { "stopped" };
+    let parsed: pxi_core::types::LxcStatus = status_out.parse().unwrap();
+    let state = if parsed.is_running() { "running" } else { "stopped" };
     println!("[상태] {state}");
     println!("[IP] {}", get_lxc_ip(vmid));
     println!();
@@ -1605,7 +1608,8 @@ fn init_lxc(vmid: &str, locale_v: &str, timezone_v: &str, packages_csv: &str) ->
     println!("=== LXC {vmid} 초기화 ===");
     require_proxmox()?;
     let status_out = common::run_str("pct", &["status", vmid])?;
-    if !status_out.contains("running") {
+    let parsed: pxi_core::types::LxcStatus = status_out.parse().unwrap();
+    if !parsed.is_running() {
         println!("[init] LXC 시작 중 (pct start {vmid})");
         common::run_str("pct", &["start", vmid])?;
     }

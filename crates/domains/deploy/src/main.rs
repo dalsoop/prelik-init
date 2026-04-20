@@ -26,7 +26,7 @@ enum Cmd {
         /// 레시피 이름 (recipes/<name>.toml) 또는 전체 경로
         recipe: String,
         #[arg(long)]
-        vmid: String,
+        vmid: pxi_core::types::Vmid,
         #[arg(long)]
         hostname: String,
         #[arg(long)]
@@ -46,7 +46,7 @@ enum Cmd {
     /// agent-orchestrator LXC 생성 + 설치 (Claude Code + Codex 포함)
     AoSetup {
         #[arg(long)]
-        vmid: String,
+        vmid: pxi_core::types::Vmid,
         #[arg(long, default_value = "agent-orchestrator")]
         hostname: String,
         #[arg(long, default_value = "local-lvm")]
@@ -234,7 +234,7 @@ fn main() -> anyhow::Result<()> {
     }
     match cli.cmd {
         Cmd::Service { recipe, vmid, hostname, ip, cores, memory, disk } => {
-            service(&recipe, &vmid, &hostname, &ip, cores.as_deref(), memory.as_deref(), disk.as_deref())
+            service(&recipe, vmid.as_str(), &hostname, &ip, cores.as_deref(), memory.as_deref(), disk.as_deref())
         }
         Cmd::ListRecipes => {
             list_recipes();
@@ -245,7 +245,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::AoSetup { vmid, hostname, storage, disk, cores, memory } => {
-            ao_setup(&vmid, &hostname, &storage, &disk, &cores, &memory)
+            ao_setup(vmid.as_str(), &hostname, &storage, &disk, &cores, &memory)
         }
         Cmd::HomelableDomain { vmid, domain } => {
             homelable_domain(vmid.as_deref(), &domain)
@@ -450,7 +450,8 @@ fn cmd_output(cmd: &str, args: &[&str]) -> String {
 
 fn ensure_lxc_running(vmid: &str) {
     let status = cmd_output("pct", &["status", vmid]);
-    if !status.contains("running") {
+    let parsed: pxi_core::types::LxcStatus = status.parse().unwrap();
+    if !parsed.is_running() {
         eprintln!("[deploy] LXC {vmid} 이 실행 중이 아닙니다 (현재: {status})");
         std::process::exit(1);
     }
@@ -893,7 +894,7 @@ fn omarchy_iso(iso_storage: &str) -> anyhow::Result<()> {
     let iso_file = "archlinux-x86_64.iso";
     let reference = format!("{iso_storage}:iso/{iso_file}");
 
-    let iso_path = common::run("pvesm", &["path", &reference])
+    let iso_path = common::run_str("pvesm", &["path", &reference])
         .unwrap_or_else(|_| format!("/var/lib/vz/template/iso/{iso_file}"));
 
     if std::path::Path::new(&iso_path).exists() {
@@ -966,7 +967,8 @@ fn mail_setup(vmid: &str, domain: &str, email: &str, password: &str) -> anyhow::
     // 1. Check/create LXC
     println!("[1/5] LXC 확인...");
     let status = cmd_output("pct", &["status", vmid]);
-    if status.contains("running") {
+    let parsed: pxi_core::types::LxcStatus = status.parse().unwrap();
+    if parsed.is_running() {
         println!("  LXC {vmid} 이미 실행 중");
     } else if !status.is_empty() {
         println!("  LXC {vmid} 존재 — 시작");

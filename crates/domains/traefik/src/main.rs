@@ -20,9 +20,9 @@ struct Cli {
 enum Cmd {
     /// Traefik 초기 설치 (LXC 생성 + 바이너리 + systemd + DNS)
     Setup {
-        /// 대상 LXC VMID
+        /// 대상 LXC VMID (규약 강제 — Vmid newtype)
         #[arg(long)]
-        vmid: String,
+        vmid: pxi_core::types::Vmid,
         /// Traefik LXC IP (자동: VMID에서 유추)
         #[arg(long)]
         ip: Option<String>,
@@ -153,8 +153,8 @@ fn main() -> anyhow::Result<()> {
     }
     match cli.cmd {
         Cmd::Setup { vmid, ip, domain, node } => {
-            let ip = ip.unwrap_or_else(|| vmid_to_ip(&vmid));
-            setup(&vmid, &ip, &domain, node.as_deref())
+            let ip = ip.unwrap_or_else(|| vmid_to_ip(vmid.as_str()));
+            setup(vmid.as_str(), &ip, &domain, node.as_deref())
         }
         Cmd::Recreate { vmid } => recreate(&vmid),
         Cmd::List { node } => { list_routes(node.as_deref()); Ok(()) }
@@ -417,9 +417,10 @@ fn setup(vmid: &str, ip: &str, domain: &str, node: Option<&str>) -> anyhow::Resu
     } else {
         cmd_output("pct", &["status", vmid])
     };
-    if status.contains("running") {
+    let parsed: pxi_core::types::LxcStatus = status.parse().unwrap();
+    if parsed.is_running() {
         println!("  LXC {vmid} 이미 실행 중 -- 건너뜀");
-    } else if !status.is_empty() && !status.contains("does not exist") && !status.contains("no such") {
+    } else if parsed.exists() && parsed.is_stopped() {
         println!("  LXC {vmid} 존재하지만 중지 상태 -- 시작");
         if is_remote {
             let _ = Command::new("pvesh")
@@ -908,7 +909,8 @@ fn cloudflare_sync(vmid: &str) -> anyhow::Result<()> {
 
     // Check running
     let status = cmd_output("pct", &["status", vmid]);
-    if !status.contains("running") {
+    let parsed: pxi_core::types::LxcStatus = status.parse().unwrap();
+    if !parsed.is_running() {
         anyhow::bail!("LXC {vmid} 이 실행 중이 아닙니다 (현재: {status})");
     }
 
