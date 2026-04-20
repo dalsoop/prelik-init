@@ -93,16 +93,25 @@ impl fmt::Display for IpCidr {
     }
 }
 
+/// prefix 생략된 bare IPv4 에 기본 적용할 CIDR prefix.
+/// pxi-lxc create 등 기존 CLI 가 "10.0.50.210" 같은 bare IP 를 허용해왔기 때문에
+/// backward compat 목적으로 16 (/16) 기본. config.toml 의 network.subnet 과 일치.
+pub const DEFAULT_PREFIX: u8 = 16;
+
 impl FromStr for IpCidr {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> anyhow::Result<Self> {
-        let (ip_s, prefix_s) = s
-            .split_once('/')
-            .ok_or_else(|| anyhow::anyhow!("CIDR 형식 필수 (예: 10.0.50.210/16). 받은 값: {s}"))?;
+        let (ip_s, prefix) = match s.split_once('/') {
+            Some((ip_s, prefix_s)) => {
+                let p: u8 = prefix_s.parse()
+                    .map_err(|e| anyhow::anyhow!("prefix 파싱 실패 '{prefix_s}': {e}"))?;
+                (ip_s, p)
+            }
+            // prefix 없으면 DEFAULT_PREFIX (/16) — bare IP 호환
+            None => (s, DEFAULT_PREFIX),
+        };
         let ip: Ipv4Addr = ip_s.parse()
             .map_err(|e| anyhow::anyhow!("IPv4 파싱 실패 '{ip_s}': {e}"))?;
-        let prefix: u8 = prefix_s.parse()
-            .map_err(|e| anyhow::anyhow!("prefix 파싱 실패 '{prefix_s}': {e}"))?;
         Self::new(ip, prefix)
     }
 }
@@ -195,9 +204,17 @@ mod tests {
     }
 
     #[test]
+    fn ipcidr_bare_ip_uses_default_prefix() {
+        // slash 없으면 DEFAULT_PREFIX(16) 적용
+        let c: IpCidr = "10.0.50.210".parse().unwrap();
+        assert_eq!(c.ip, Ipv4Addr::new(10, 0, 50, 210));
+        assert_eq!(c.prefix, DEFAULT_PREFIX);
+    }
+
+    #[test]
     fn ipcidr_rejects_malformed() {
-        assert!("10.0.50.210".parse::<IpCidr>().is_err());      // no prefix
         assert!("abc/16".parse::<IpCidr>().is_err());           // bad IP
+        assert!("abc".parse::<IpCidr>().is_err());              // bare but invalid
         assert!("10.0.50.210/99".parse::<IpCidr>().is_err());   // prefix > 32
     }
 
