@@ -1,7 +1,21 @@
+let { Domain } = import "../../../ncl/domain_contract.ncl" in
+
 {
   name = "traefik",
-  description = "Traefik 리버스 프록시 + compose 기반 재생성",
-  tags = { product = 'infra, layer = 'remote, platform = 'debian },
+  description = "Traefik 리버스 프록시 관리",
+  tags = { product = 'service, layer = 'host, platform = 'proxmox },
   requires = ["lxc"],
-  provides = ["traefik install", "traefik recreate", "traefik route-add", "traefik route-list"],
-}
+  provides = [
+    "traefik setup",
+    "traefik recreate",
+    "traefik list",
+    "traefik add",
+    "traefik remove",
+    "traefik resync",
+    "traefik drift",
+    "traefik cert-verify",
+    "traefik cert-recheck",
+    "traefik cloudflare-sync",
+    "traefik doctor"
+  ],
+} | Domain

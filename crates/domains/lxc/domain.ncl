@@ -1,6 +1,35 @@
+let { Domain } = import "../../../ncl/domain_contract.ncl" in
+
 {
   name = "lxc",
   description = "LXC 수명 관리 (Proxmox pct 래퍼)",
   tags = { product = 'infra, layer = 'remote, platform = 'proxmox },
-  provides = ["lxc create", "lxc delete", "lxc list", "lxc enter", "lxc backup"],
-}
+  provides = [
+    "lxc list",
+    "lxc status",
+    "lxc create",
+    "lxc start",
+    "lxc stop",
+    "lxc restart",
+    "lxc reboot",
+    "lxc delete",
+    "lxc enter",
+    "lxc backup",
+    "lxc snapshot-create",
+    "lxc snapshot-list",
+    "lxc snapshot-restore",
+    "lxc snapshot-delete",
+    "lxc resize",
+    "lxc init",
+    "lxc config",
+    "lxc align-vmid-ip",
+    "lxc mount",
+    "lxc unmount",
+    "lxc bootstrap",
+    "lxc gateway-fix",
+    "lxc route-audit",
+    "lxc route-audit-watch",
+    "lxc mgmt-setup",
+    "lxc doctor"
+  ],
+} | Domain

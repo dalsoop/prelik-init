@@ -1,11 +1,14 @@
+let { Domain } = import "../../../ncl/domain_contract.ncl" in
+
 {
   name = "comfyui",
-  description = "ComfyUI LXC 설치 관리 (GPU 패스스루 + 설치 + systemd)",
+  description = "ComfyUI LXC 설치 관리",
   tags = { product = 'ai, layer = 'remote, platform = 'proxmox },
   requires = ["lxc"],
   provides = [
-    "comfyui install",
     "comfyui gpu-passthrough",
+    "comfyui install",
     "comfyui status",
+    "comfyui doctor"
   ],
-}
+} | Domain

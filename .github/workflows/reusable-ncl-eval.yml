@@ -45,6 +45,10 @@ jobs:
             exit 0
           fi
           for f in "${files[@]}"; do
+            # *_contract.ncl 은 schema 전용이라 자체 eval 불가 — import 되는 쪽에서 간접 검증됨.
+            case "$f" in
+              *_contract.ncl) echo "→ skip (contract schema): $f"; continue ;;
+            esac
             echo "→ nickel eval $f"
             if ! nickel eval "$f" > /dev/null; then
               echo "::error file=$f::Nickel eval 실패"
