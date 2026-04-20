@@ -1,3 +1,8 @@
+pub mod brand;
 pub mod common;
+pub mod config;
 pub mod convention;
+pub mod os;
 pub mod registry;
+
+pub use brand::paths;

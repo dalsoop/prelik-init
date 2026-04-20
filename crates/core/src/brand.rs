@@ -34,7 +34,7 @@ pub fn domain_bin(domain: &str) -> String {
 
 /// 시스템 경로들
 pub mod paths {
-    use super::*;
+    use std::path::PathBuf;
 
     pub fn config_root() -> &'static str {
         concat!("/etc/", "pxi")
@@ -42,5 +42,20 @@ pub mod paths {
 
     pub fn data_root() -> &'static str {
         concat!("/var/lib/", "pxi")
+    }
+
+    /// 설정 디렉토리 경로 (XDG_CONFIG_HOME 또는 /etc/pxi 폴백).
+    pub fn config_dir() -> anyhow::Result<PathBuf> {
+        // XDG_CONFIG_HOME → ~/.config/pxi. 없으면 /etc/pxi.
+        if let Ok(home) = std::env::var("XDG_CONFIG_HOME") {
+            return Ok(PathBuf::from(home).join("pxi"));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let user_cfg = PathBuf::from(home).join(".config").join("pxi");
+            if user_cfg.exists() {
+                return Ok(user_cfg);
+            }
+        }
+        Ok(PathBuf::from(config_root()))
     }
 }

@@ -473,7 +473,7 @@ fn snapshot_create(vmid: &str, name: &str, description: Option<&str>) -> anyhow:
         args.push("--description");
         args.push(d);
     }
-    common::run("pct", &args)?;
+    common::run_str("pct", &args)?;
     println!("  스냅샷 생성 완료");
     Ok(())
 }
@@ -516,7 +516,7 @@ fn parse_pct_listsnapshot(out: &str) -> anyhow::Result<Vec<SnapshotRow>> {
 }
 
 fn snapshot_list(vmid: &str, json: bool) -> anyhow::Result<()> {
-    let out = common::run("pct", &["listsnapshot", vmid])?;
+    let out = common::run_str("pct", &["listsnapshot", vmid])?;
     if !json {
         println!("{out}");
         return Ok(());
@@ -528,14 +528,14 @@ fn snapshot_list(vmid: &str, json: bool) -> anyhow::Result<()> {
 
 fn snapshot_restore(vmid: &str, name: &str) -> anyhow::Result<()> {
     println!("=== LXC {vmid} 스냅샷 복원: {name} ===");
-    common::run("pct", &["rollback", vmid, name])?;
+    common::run_str("pct", &["rollback", vmid, name])?;
     println!("  복원 완료 -- LXC 상태가 '{name}' 시점으로 되돌아감");
     Ok(())
 }
 
 fn snapshot_delete(vmid: &str, name: &str) -> anyhow::Result<()> {
     println!("=== LXC {vmid} 스냅샷 삭제: {name} ===");
-    common::run("pct", &["delsnapshot", vmid, name])?;
+    common::run_str("pct", &["delsnapshot", vmid, name])?;
     println!("  삭제 완료");
     Ok(())
 }
@@ -547,15 +547,15 @@ fn resize(vmid: &str, cores: Option<&str>, memory: Option<&str>, disk_expand: Op
     }
 
     if let Some(c) = cores {
-        common::run("pct", &["set", vmid, "--cores", c])?;
+        common::run_str("pct", &["set", vmid, "--cores", c])?;
         println!("  cores: {c}");
     }
     if let Some(m) = memory {
-        common::run("pct", &["set", vmid, "--memory", m])?;
+        common::run_str("pct", &["set", vmid, "--memory", m])?;
         println!("  memory: {m} MB");
     }
     if let Some(d) = disk_expand {
-        common::run("pct", &["resize", vmid, "rootfs", d])?;
+        common::run_str("pct", &["resize", vmid, "rootfs", d])?;
         println!("  disk expand: {d}");
     }
     println!("변경 사항은 재시작 후 반영될 수 있습니다 (cores/memory는 라이브 가능)");
@@ -592,7 +592,7 @@ fn parse_pct_list(out: &str) -> anyhow::Result<Vec<LxcRow>> {
 }
 
 fn list(json: bool) -> anyhow::Result<()> {
-    let out = common::run("pct", &["list"])?;
+    let out = common::run_str("pct", &["list"])?;
     if !json {
         // Enhanced format with IP like old phs
         for line in out.lines().skip(1) {
@@ -628,7 +628,7 @@ fn parse_pct_status(raw: &str) -> anyhow::Result<&str> {
 
 fn status(vmid: &str, json: bool) -> anyhow::Result<()> {
     if !json {
-        let out = common::run("pct", &["status", vmid])?;
+        let out = common::run_str("pct", &["status", vmid])?;
         println!("{out}");
         return Ok(());
     }
@@ -656,9 +656,12 @@ fn create(
     gateway: Option<&str>,
     bridge: &str,
 ) -> anyhow::Result<()> {
+    // VMID↔IP 규약 검증 — 단일 진입점.
+    pxi_core::convention::validate_ip(vmid, ip)?;
+
     println!("=== LXC 생성: {vmid} ({hostname}) ===");
 
-    let templates = common::run("pveam", &["list", "local"])?;
+    let templates = common::run_str("pveam", &["list", "local"])?;
     let full_template = templates
         .lines()
         .skip(1)
@@ -717,33 +720,33 @@ fn create(
 }
 
 fn start(vmid: &str) -> anyhow::Result<()> {
-    common::run("pct", &["start", vmid])?;
+    common::run_str("pct", &["start", vmid])?;
     println!("  LXC {vmid} 시작");
     Ok(())
 }
 
 fn stop(vmid: &str) -> anyhow::Result<()> {
-    common::run("pct", &["stop", vmid])?;
+    common::run_str("pct", &["stop", vmid])?;
     println!("  LXC {vmid} 정지");
     Ok(())
 }
 
 fn restart(vmid: &str) -> anyhow::Result<()> {
-    common::run("pct", &["reboot", vmid])?;
+    common::run_str("pct", &["reboot", vmid])?;
     println!("  LXC {vmid} 재시작");
     Ok(())
 }
 
 fn delete(vmid: &str, force: bool) -> anyhow::Result<()> {
-    let status = common::run("pct", &["status", vmid]).unwrap_or_default();
+    let status = common::run_str("pct", &["status", vmid]).unwrap_or_default();
     if status.contains("running") {
-        common::run("pct", &["stop", vmid])?;
+        common::run_str("pct", &["stop", vmid])?;
     }
     if !force {
         eprintln!("  삭제 전 백업 권장: pxi-lxc backup {vmid}\n  또는 --force 로 무시");
         anyhow::bail!("중단됨");
     }
-    common::run("pct", &["destroy", vmid])?;
+    common::run_str("pct", &["destroy", vmid])?;
     println!("  LXC {vmid} 삭제");
     Ok(())
 }
@@ -1601,10 +1604,10 @@ WantedBy=timers.target\n";
 fn init_lxc(vmid: &str, locale_v: &str, timezone_v: &str, packages_csv: &str) -> anyhow::Result<()> {
     println!("=== LXC {vmid} 초기화 ===");
     require_proxmox()?;
-    let status_out = common::run("pct", &["status", vmid])?;
+    let status_out = common::run_str("pct", &["status", vmid])?;
     if !status_out.contains("running") {
         println!("[init] LXC 시작 중 (pct start {vmid})");
-        common::run("pct", &["start", vmid])?;
+        common::run_str("pct", &["start", vmid])?;
     }
 
     if locale_v != "none" { setup_locale(vmid, locale_v)?; }
@@ -1616,7 +1619,7 @@ fn init_lxc(vmid: &str, locale_v: &str, timezone_v: &str, packages_csv: &str) ->
 }
 
 fn pct_exec(vmid: &str, script: &str) -> anyhow::Result<String> {
-    common::run("pct", &["exec", vmid, "--", "bash", "-c", script])
+    common::run_str("pct", &["exec", vmid, "--", "bash", "-c", script])
 }
 
 fn setup_locale(vmid: &str, locale_v: &str) -> anyhow::Result<()> {
