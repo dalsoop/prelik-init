@@ -1,0 +1,89 @@
+name: Nickel Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pxi-ncl-eval:
+    # pxi repo 안의 ncl/ 파일들이 syntax + contract 통과하는지
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nickel
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -L https://github.com/tweag/nickel/releases/latest/download/nickel-x86_64-linux \
+            -o "$HOME/.local/bin/nickel"
+          chmod +x "$HOME/.local/bin/nickel"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/nickel" --version
+
+      - name: Eval pxi ncl/*.ncl
+        run: |
+          set -e
+          fail=0
+          for f in ncl/*.ncl; do
+            echo "→ nickel eval $f"
+            if ! nickel eval "$f" > /dev/null; then
+              echo "::error file=$f::Nickel eval 실패"
+              fail=1
+            fi
+          done
+          # 각 도메인의 domain.ncl 도 syntax 체크
+          for f in crates/domains/*/domain.ncl; do
+            echo "→ nickel eval $f"
+            if ! nickel eval "$f" > /dev/null; then
+              echo "::error file=$f::Nickel eval 실패"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  control-plane-validate:
+    # control-plane 은 private repo. GH_READ_TOKEN (repo: read PAT) secret
+    # 등록 전까지 step 자체가 no-op. 등록되면 자동으로 검증 실행.
+    #
+    # 로컬에서는 직접:
+    #   cd /root/control-plane && bash nickel/validate-all.sh --ci
+    runs-on: ubuntu-latest
+    env:
+      GH_READ_TOKEN: ${{ secrets.GH_READ_TOKEN }}
+    steps:
+      - name: Guard — skip if no PAT
+        id: guard
+        run: |
+          if [ -z "$GH_READ_TOKEN" ]; then
+            echo "::notice::GH_READ_TOKEN secret 미등록 — control-plane 검증 skip"
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout control-plane (pinned ref)
+        if: steps.guard.outputs.has_token == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: dalsoop/control-plane
+          # vars.CONTROL_PLANE_REF 로 특정 SHA/tag pin (없으면 main 기본)
+          # codex #44 P2: 외부 repo floating HEAD 가 gate 되는 문제 회피.
+          ref: ${{ vars.CONTROL_PLANE_REF || 'main' }}
+          path: control-plane
+          token: ${{ secrets.GH_READ_TOKEN }}
+
+      - name: Install Nickel
+        if: steps.guard.outputs.has_token == 'true'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -L https://github.com/tweag/nickel/releases/latest/download/nickel-x86_64-linux \
+            -o "$HOME/.local/bin/nickel"
+          chmod +x "$HOME/.local/bin/nickel"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run validate-all.sh (CI mode)
+        if: steps.guard.outputs.has_token == 'true'
+        working-directory: control-plane
+        run: bash nickel/validate-all.sh --ci
