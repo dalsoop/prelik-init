@@ -73,13 +73,18 @@ pub struct NetworkConfig {
 fn default_subnet() -> u8 { 16 }
 
 impl Config {
+    /// 로드 규약 (services 레지스트리와 동일):
+    ///   - 파일 없음 → Self::default() (fresh install 안전망)
+    ///   - 파일 존재하지만 읽기/파싱 실패 → **bail** (관리자 override 무시되는 silent fallback 방지)
     pub fn load() -> anyhow::Result<Self> {
         let path = paths::config_dir()?.join("config.toml");
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw = fs::read_to_string(&path)?;
-        let cfg = toml::from_str(&raw)?;
+        let raw = fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("{} 읽기 실패: {e}", path.display()))?;
+        let cfg = toml::from_str(&raw)
+            .map_err(|e| anyhow::anyhow!("{} TOML 파싱 실패: {e}", path.display()))?;
         Ok(cfg)
     }
 }

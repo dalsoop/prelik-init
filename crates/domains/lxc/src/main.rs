@@ -241,8 +241,9 @@ fn main() -> anyhow::Result<()> {
             gateway,
             bridge,
         } => {
-            // None 이면 config.toml 의 [lxc] 섹션에서 로드 (없으면 LxcConfig::default).
-            let cfg = pxi_core::config::Config::load().unwrap_or_default();
+            // config.toml 파싱 실패면 bail (silent default fallback 금지).
+            // 파일 없으면 Config::default() — 기존 fresh-install 동작 유지.
+            let cfg = pxi_core::config::Config::load()?;
             create(
                 vmid.as_str(),
                 &hostname,
