@@ -31,10 +31,10 @@ impl Drop for FileCleanup {
 /// mktemp로 private 파일 만들고 0600 권한 보장 + Drop 가드.
 /// 반환: (path 문자열, Cleanup 가드).
 pub fn secure_tempfile() -> anyhow::Result<(String, FileCleanup)> {
-    let out = common::run("mktemp", &["-t", "pxi.XXXXXXXX"])?;
+    let out = common::run_str("mktemp", &["-t", "pxi.XXXXXXXX"])?;
     let tmp = out.trim().to_string();
     let guard = FileCleanup(PathBuf::from(&tmp));
-    common::run("chmod", &["600", &tmp])?;
+    common::run_str("chmod", &["600", &tmp])?;
     Ok((tmp, guard))
 }
 
