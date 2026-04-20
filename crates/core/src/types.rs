@@ -93,25 +93,22 @@ impl fmt::Display for IpCidr {
     }
 }
 
-/// prefix 생략된 bare IPv4 에 기본 적용할 CIDR prefix.
-/// pxi-lxc create 등 기존 CLI 가 "10.0.50.210" 같은 bare IP 를 허용해왔기 때문에
-/// backward compat 목적으로 16 (/16) 기본. config.toml 의 network.subnet 과 일치.
-pub const DEFAULT_PREFIX: u8 = 16;
-
 impl FromStr for IpCidr {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> anyhow::Result<Self> {
-        let (ip_s, prefix) = match s.split_once('/') {
-            Some((ip_s, prefix_s)) => {
-                let p: u8 = prefix_s.parse()
-                    .map_err(|e| anyhow::anyhow!("prefix 파싱 실패 '{prefix_s}': {e}"))?;
-                (ip_s, p)
-            }
-            // prefix 없으면 DEFAULT_PREFIX (/16) — bare IP 호환
-            None => (s, DEFAULT_PREFIX),
-        };
+        // CIDR prefix 필수. bare IP 허용하려면 config.network.subnet 과 연동돼야
+        // 하는데 타입 단독 로는 그 값 알 수 없음 (codex #38: /16 하드코딩 금지).
+        // bare IP 가 필요한 호출측은 String 유지 후 pxi-lxc 가 config 기반 확장.
+        let (ip_s, prefix_s) = s.split_once('/').ok_or_else(|| {
+            anyhow::anyhow!(
+                "IpCidr 는 CIDR 형식 필수 (예: 10.0.50.210/16). bare IP 는 호출측에서 \
+                 직접 처리 (pxi-lxc 가 config.network.subnet 적용). 받은 값: {s}"
+            )
+        })?;
         let ip: Ipv4Addr = ip_s.parse()
             .map_err(|e| anyhow::anyhow!("IPv4 파싱 실패 '{ip_s}': {e}"))?;
+        let prefix: u8 = prefix_s.parse()
+            .map_err(|e| anyhow::anyhow!("prefix 파싱 실패 '{prefix_s}': {e}"))?;
         Self::new(ip, prefix)
     }
 }
@@ -204,17 +201,16 @@ mod tests {
     }
 
     #[test]
-    fn ipcidr_bare_ip_uses_default_prefix() {
-        // slash 없으면 DEFAULT_PREFIX(16) 적용
-        let c: IpCidr = "10.0.50.210".parse().unwrap();
-        assert_eq!(c.ip, Ipv4Addr::new(10, 0, 50, 210));
-        assert_eq!(c.prefix, DEFAULT_PREFIX);
+    fn ipcidr_requires_cidr() {
+        // bare IP 거부 (prefix 필수) — config subnet 적용은 호출측 책임
+        assert!("10.0.50.210".parse::<IpCidr>().is_err());
+        let e = "10.0.50.210".parse::<IpCidr>().unwrap_err().to_string();
+        assert!(e.contains("CIDR 형식 필수"));
     }
 
     #[test]
     fn ipcidr_rejects_malformed() {
         assert!("abc/16".parse::<IpCidr>().is_err());           // bad IP
-        assert!("abc".parse::<IpCidr>().is_err());              // bare but invalid
         assert!("10.0.50.210/99".parse::<IpCidr>().is_err());   // prefix > 32
     }
 

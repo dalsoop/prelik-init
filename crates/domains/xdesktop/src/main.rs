@@ -50,8 +50,9 @@ enum Cmd {
         #[arg(long)] host: Option<String>,
         /// 호스트네임 (생략 시 --host 앞부분 또는 xdesktop-<tail> 에서 유도)
         #[arg(long)] hostname: Option<String>,
-        /// IP CIDR (생략 시 VMID 규약으로 유도: 5YYY → 10.0.50.YYY/16)
-        #[arg(long)] ip: Option<IpCidr>,
+        /// IP (CIDR optional — bare IP 도 허용. bare 는 pxi-lxc 가
+        /// config.network.subnet 적용). 생략 시 VMID 규약으로 canonical_cidr 유도.
+        #[arg(long)] ip: Option<String>,
         #[arg(long, default_value = "4")] cores: String,
         #[arg(long, default_value = "4096")] memory: String,
         #[arg(long, default_value = "20")] disk: String,
@@ -121,11 +122,12 @@ fn main() -> anyhow::Result<()> {
     }
     match cli.cmd {
         Cmd::Setup { vmid, hostname, ip, host, cores, memory, disk, port, user, helium_tag } => {
-            // Vmid 는 clap argparse 에서 이미 convention 검증됨. 여기선 ip 일치만.
+            // Vmid 는 clap argparse 에서 이미 convention 검증됨. ip 는 bare/CIDR 둘 다
+            // 허용 (convention::validate_ip 내부에서 strip). 생략 시 canonical_cidr.
             let ip_str = match ip {
                 Some(explicit) => {
-                    convention::validate_ip(vmid.as_str(), &explicit.to_string())?;
-                    explicit.to_string()
+                    convention::validate_ip(vmid.as_str(), &explicit)?;
+                    explicit
                 }
                 None => convention::canonical_cidr(vmid.as_str(), 16)?,
             };
