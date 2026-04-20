@@ -12,6 +12,9 @@ let { Domain } = import "../../../ncl/contracts/domain.ncl" in
     "vaultwarden domain-set",
     "vaultwarden smtp-mailgun",
     "vaultwarden backup",
-    "vaultwarden bw-install"
+    "vaultwarden bw-install",
+    "vaultwarden install-systemd",
+    "vaultwarden install-backup-timer",
+    "vaultwarden install-env"
   ],
 } | Domain
