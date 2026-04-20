@@ -42,13 +42,27 @@ jobs:
           exit $fail
 
   control-plane-validate:
-    # control-plane 은 private repo 라 GH_READ_TOKEN (repo: read) secret 등록돼야 실행.
-    # 미등록 상태에선 skip. 로컬에서는 control-plane 디렉토리에서 직접:
+    # control-plane 은 private repo. GH_READ_TOKEN (repo: read PAT) secret
+    # 등록 전까지 step 자체가 no-op. 등록되면 자동으로 검증 실행.
+    #
+    # 로컬에서는 직접:
     #   cd /root/control-plane && bash nickel/validate-all.sh --ci
     runs-on: ubuntu-latest
-    if: ${{ secrets.GH_READ_TOKEN != '' }}
+    env:
+      GH_READ_TOKEN: ${{ secrets.GH_READ_TOKEN }}
     steps:
+      - name: Guard — skip if no PAT
+        id: guard
+        run: |
+          if [ -z "$GH_READ_TOKEN" ]; then
+            echo "::notice::GH_READ_TOKEN secret 미등록 — control-plane 검증 skip"
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout control-plane
+        if: steps.guard.outputs.has_token == 'true'
         uses: actions/checkout@v4
         with:
           repository: dalsoop/control-plane
@@ -56,11 +70,13 @@ jobs:
           token: ${{ secrets.GH_READ_TOKEN }}
 
       - name: Install Nickel
+        if: steps.guard.outputs.has_token == 'true'
         run: |
           curl -L https://github.com/tweag/nickel/releases/latest/download/nickel-x86_64-linux \
             -o /usr/local/bin/nickel
           chmod +x /usr/local/bin/nickel
 
       - name: Run validate-all.sh (CI mode)
+        if: steps.guard.outputs.has_token == 'true'
         working-directory: control-plane
         run: bash nickel/validate-all.sh --ci
