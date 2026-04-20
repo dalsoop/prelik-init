@@ -77,9 +77,11 @@ jobs:
       - name: Install Nickel
         if: steps.guard.outputs.has_token == 'true'
         run: |
+          mkdir -p "$HOME/.local/bin"
           curl -L https://github.com/tweag/nickel/releases/latest/download/nickel-x86_64-linux \
-            -o /usr/local/bin/nickel
-          chmod +x /usr/local/bin/nickel
+            -o "$HOME/.local/bin/nickel"
+          chmod +x "$HOME/.local/bin/nickel"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run validate-all.sh (CI mode)
         if: steps.guard.outputs.has_token == 'true'
