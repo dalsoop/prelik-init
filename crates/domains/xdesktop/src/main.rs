@@ -147,9 +147,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn audit_install_timer(time: &str) -> anyhow::Result<()> {
-    // HH:MM 형식 검증
-    if !time.len() == 5 || !time.contains(':') {
-        anyhow::bail!("--time 형식 HH:MM (예: 09:00)");
+    // HH:MM 형식 엄격 검증 — 이전 버전의 `!time.len() == 5` 는 bitwise NOT 버그로
+    // 모든 값 통과시킴 (codex review #34 에서 지적). HH:MM 정확히 파싱.
+    let bad_format = || anyhow::anyhow!("--time 형식 HH:MM 필수 (예: 09:00). 받은 값: {time:?}");
+    let (hh_s, mm_s) = time.split_once(':').ok_or_else(bad_format)?;
+    if hh_s.len() != 2 || mm_s.len() != 2 {
+        return Err(bad_format());
+    }
+    let hh: u8 = hh_s.parse().map_err(|_| bad_format())?;
+    let mm: u8 = mm_s.parse().map_err(|_| bad_format())?;
+    if hh > 23 || mm > 59 {
+        anyhow::bail!("--time 범위 초과: HH 0-23, MM 0-59. 받은 값: {time}");
     }
     let service = r#"[Unit]
 Description=pxi VMID-IP 규약 감사
