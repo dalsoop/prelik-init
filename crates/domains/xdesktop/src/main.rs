@@ -8,6 +8,7 @@
 
 use clap::{Parser, Subcommand};
 use pxi_core::{common, convention};
+use pxi_core::types::{Vmid, LxcStatus};
 
 const INSTALL_SCRIPT: &str = include_str!("../scripts/install-desktop.sh");
 const DEV_SCRIPT: &str = include_str!("../scripts/dev-setup.sh");
@@ -40,16 +41,17 @@ enum Cmd {
     /// 전체 배포: LXC 생성 → 데스크톱 설치 → (선택) traefik 라우트 등록
     ///
     /// 규약: VMID 5XXXX → IP 10.0.50.XXX (XXX = 마지막 3자리).
-    /// --ip 와 --hostname 은 생략 가능 (vmid/host 로부터 유도).
-    /// 명시적으로 주면 규약 일치 검증 후 진행, 불일치면 오류.
+    /// setup 은 신규 LXC 생성이므로 convention Vmid 강제. 기존 LXC 조작 서브커맨드
+    /// (install/expose/status/destroy/verify/dev) 는 호환성 위해 String 유지.
     Setup {
         /// VMID — 5XXXX 형태 필수. 마지막 3자리가 IP 마지막 옥텟이 됨 (5YYY → 10.0.50.YYY)
-        #[arg(long)] vmid: String,
+        #[arg(long)] vmid: Vmid,
         /// traefik 공개 호스트 (예: xdesktop-02.50.internal.kr). 지정 시 라우트 등록
         #[arg(long)] host: Option<String>,
         /// 호스트네임 (생략 시 --host 앞부분 또는 xdesktop-<tail> 에서 유도)
         #[arg(long)] hostname: Option<String>,
-        /// IP CIDR (생략 시 VMID 규약으로 유도: 5YYY → 10.0.50.YYY/16)
+        /// IP (CIDR optional — bare IP 도 허용. bare 는 pxi-lxc 가
+        /// config.network.subnet 적용). 생략 시 VMID 규약으로 canonical_cidr 유도.
         #[arg(long)] ip: Option<String>,
         #[arg(long, default_value = "4")] cores: String,
         #[arg(long, default_value = "4096")] memory: String,
@@ -120,16 +122,17 @@ fn main() -> anyhow::Result<()> {
     }
     match cli.cmd {
         Cmd::Setup { vmid, hostname, ip, host, cores, memory, disk, port, user, helium_tag } => {
-            // pxi_core::convention 공유 규약 — 위반이면 bail.
-            let ip = match ip {
+            // Vmid 는 clap argparse 에서 이미 convention 검증됨. ip 는 bare/CIDR 둘 다
+            // 허용 (convention::validate_ip 내부에서 strip). 생략 시 canonical_cidr.
+            let ip_str = match ip {
                 Some(explicit) => {
-                    convention::validate_ip(&vmid, &explicit)?;
+                    convention::validate_ip(vmid.as_str(), &explicit)?;
                     explicit
                 }
-                None => convention::canonical_cidr(&vmid, 16)?,
+                None => convention::canonical_cidr(vmid.as_str(), 16)?,
             };
-            let hostname = hostname.unwrap_or_else(|| derive_hostname(&vmid, host.as_deref()));
-            setup(&vmid, &hostname, &ip, host.as_deref(), &cores, &memory, &disk, &port, &user, &helium_tag)
+            let hostname = hostname.unwrap_or_else(|| derive_hostname(vmid.as_str(), host.as_deref()));
+            setup(vmid.as_str(), &hostname, &ip_str, host.as_deref(), &cores, &memory, &disk, &port, &user, &helium_tag)
         }
         Cmd::Install { vmid, port, user, helium_tag } => install(&vmid, &port, &user, &helium_tag),
         Cmd::Expose { vmid, host, port } => expose(&vmid, &host, &port),
@@ -366,13 +369,15 @@ fn expose(vmid: &str, host: &str, port: &str) -> anyhow::Result<()> {
 fn status(vmid: &str) -> anyhow::Result<()> {
     println!("=== xdesktop 상태: LXC {vmid} ===");
 
-    // LXC
-    let lxc_status = common::run_capture("pct", &["status", vmid])
-        .unwrap_or_else(|_| "unknown".into());
-    println!("  LXC:      {}", lxc_status.trim());
+    // LXC — LxcStatus enum 으로 파싱. run_capture 가 non-zero exit 에서 Err 반환하면
+    // 에러 메시지 안에 stderr ("...does not exist") 가 포함돼 NotFound 감지 가능.
+    let raw = common::run_capture("pct", &["status", vmid])
+        .unwrap_or_else(|e| e.to_string());
+    let status: LxcStatus = raw.parse().unwrap();  // FromStr::Err == Infallible
+    println!("  LXC:      {} ({:?})", raw.trim(), status);
 
-    if !lxc_status.contains("running") {
-        println!("  (LXC 정지 — 이후 체크 스킵)");
+    if !status.is_running() {
+        println!("  (LXC 미실행 — 이후 체크 스킵)");
         return Ok(());
     }
 
@@ -440,9 +445,10 @@ fn verify(vmid: &str, host: Option<&str>, port: &str) -> anyhow::Result<()> {
         println!("  {mark} {name:<35} {detail}");
     };
 
-    // 1. LXC 기동
+    // 1. LXC 기동 — LxcStatus enum 으로 판정
     let running = common::run_capture("pct", &["status", vmid])
-        .map(|s| s.contains("running")).unwrap_or(false);
+        .map(|s| s.parse::<LxcStatus>().unwrap().is_running())
+        .unwrap_or(false);
     check("LXC running", running, "");
     if !running { anyhow::bail!("LXC 정지 — 이후 체크 생략"); }
 
