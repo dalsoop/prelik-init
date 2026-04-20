@@ -53,10 +53,9 @@ enum Cmd {
     Restart,
     /// LXC에 ELK 설치 (Elasticsearch + Kibana + Logstash)
     Install {
-        /// 대상 LXC VMID (기본: services_registry 의 'elk' → 50190).
-        /// 변경 시 control-plane/config/services_registry.toml 업데이트 필요.
-        #[arg(long)]
-        vmid: Option<String>,
+        /// 대상 LXC VMID (기본: 50190)
+        #[arg(long, default_value = "50190")]
+        vmid: String,
     },
     /// ELK 스택 진단
     Doctor,
@@ -136,14 +135,7 @@ fn main() -> anyhow::Result<()> {
                         "systemctl restart elasticsearch kibana logstash && \
                          sleep 5 && systemctl is-active elasticsearch kibana logstash"]);
         }
-        Cmd::Install { vmid } => {
-            // --vmid 명시 안 하면 services_registry 에서 조회. 레지스트리 없으면 에러.
-            let resolved = match vmid {
-                Some(v) => v,
-                None => pxi_core::services::vmid_for("elk")?,
-            };
-            install(&resolved)?;
-        }
+        Cmd::Install { vmid } => { install(&vmid)?; }
         Cmd::Doctor => { doctor(); }
     }
     Ok(())
