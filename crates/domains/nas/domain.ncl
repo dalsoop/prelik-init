@@ -1,4 +1,4 @@
-let { Domain } = import "../../../ncl/domain_contract.ncl" in
+let { Domain } = import "../../../ncl/contracts/domain.ncl" in
 
 {
   name = "nas",

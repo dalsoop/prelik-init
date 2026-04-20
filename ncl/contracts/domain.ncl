@@ -1,7 +1,9 @@
 # pxi 도메인 contract — crates/domains/*/domain.ncl 전부 이 스키마 준수.
 #
-# 사용:
-#   let { Domain } = import "../../../ncl/domain_contract.ncl" in
+# 위치: ncl/contracts/ (ncl/*.ncl 글롭 밖이라 CI 가 자체 eval 시도 X).
+#
+# 사용 (crates/domains/<name>/domain.ncl 에서):
+#   let { Domain } = import "../../../ncl/contracts/domain.ncl" in
 #   {
 #     name = "lxc",
 #     ...

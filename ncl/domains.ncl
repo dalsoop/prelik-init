@@ -1,10 +1,12 @@
 # pxi 도메인 SSOT 인덱스 — 실제 도메인 정의는 crates/domains/*/domain.ncl.
-# 이 파일은 단순히 모든 도메인 instance 를 import 해 하나의 레코드로 노출.
+# 각 도메인 파일은 ncl/contracts/domain.ncl 의 Domain contract 를 준수하므로,
+# 이 파일을 eval 하는 것만으로 29개 전부 검증됨.
 #
-# 각 도메인 파일은 `ncl/domain_contract.ncl` 의 Domain contract 를 준수하므로,
-# 이 파일을 eval 하는 것만으로 29개 전부 검증됨. Nickel 이 import 시점에 계약 적용.
+# 추가로 이 파일은 top-level 에서:
+#   - requires 에 적힌 도메인이 실제로 존재하는 이름인지 확인 (codex #46 P1)
+# 검증을 수행한다. 누락되면 nickel eval 이 명시적으로 실패 → CI 게이트.
 
-{
+let domains = {
   account     = import "../crates/domains/account/domain.ncl",
   ai          = import "../crates/domains/ai/domain.ncl",
   backup      = import "../crates/domains/backup/domain.ncl",
@@ -35,3 +37,20 @@
   workspace   = import "../crates/domains/workspace/domain.ncl",
   xdesktop    = import "../crates/domains/xdesktop/domain.ncl",
 }
+in
+
+let all_names = std.record.fields domains in
+
+# 모든 도메인의 requires 를 flat 하게 모아 존재하지 않는 이름 추출.
+let all_requires = std.array.flat_map (fun d =>
+  let r = domains."%{d}" in
+  if std.record.has_field "requires" r then r.requires else []
+) all_names in
+
+let unknown = std.array.filter (fun r =>
+  !(std.array.any ((==) r) all_names)
+) all_requires in
+
+if std.array.length unknown > 0 then
+  std.fail_with "requires references unknown domain(s): %{std.string.join ", " unknown}"
+else domains
