@@ -352,7 +352,12 @@ fn install(vmid: &str, port: &str, user: &str, helium_tag: &str) -> anyhow::Resu
 fn expose(vmid: &str, host: &str, port: &str) -> anyhow::Result<()> {
     // 기본 레지스트리 등록 — pxi run service list 에 노출 + traefik dynamic/ 기본 yml 생성.
     // nginx HTTP/1.1 bridge 가 LXC 내부에서 Xpra 앞에 있으므로 traefik 특수 설정 불필요.
-    let domain = host.splitn(2, '.').nth(1).unwrap_or("50.internal.kr");
+    // host "xdesktop-02.50.internal.kr" → domain "50.internal.kr" (절단).
+    // fallback: Config::network.internal_zone_pve() (pxi 기본 pve 존).
+    let fallback = pxi_core::config::Config::load()
+        .map(|c| c.network.internal_zone_pve())
+        .unwrap_or_else(|_| "50.internal.kr".to_string());
+    let domain = host.splitn(2, '.').nth(1).unwrap_or(&fallback);
     common::run("pxi-service", &[
         "add",
         "--domain", domain,

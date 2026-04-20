@@ -68,7 +68,13 @@ fn es_url() -> String {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let es = es_url();
-    let kibana = "https://elk.50.internal.kr";
+    // Kibana URL — config.toml network.internal_zone_pve() 기반 동적 구성.
+    // 공식: elk.{zone} (zone fallback: 50.internal.kr)
+    let zone = pxi_core::config::Config::load()
+        .map(|c| c.network.internal_zone_pve())
+        .unwrap_or_else(|_| "50.internal.kr".into());
+    let kibana_url = format!("https://elk.{zone}");
+    let kibana = kibana_url.as_str();
 
     match cli.cmd {
         Cmd::Status => {
@@ -202,20 +208,25 @@ if entry not in data.get('translations', []):
         println!("  ✓ x-pack/.i18nrc.json 등록");
     }
 
-    // 3. Traefik 라우트
+    // 3. Traefik 라우트 — host = elk.{internal_zone_pve}
     println!("[3/4] Traefik 라우트");
+    let zone = pxi_core::config::Config::load()
+        .map(|c| c.network.internal_zone_pve())
+        .unwrap_or_else(|_| "50.internal.kr".into());
+    let elk_host = format!("elk.{zone}");
+    let check_cmd = format!("curl -sf --max-time 3 -o /dev/null -w '%{{http_code}}' https://{elk_host}/ 2>/dev/null");
     let route_ok = Command::new("bash")
-        .args(["-c", "curl -sf --max-time 3 -o /dev/null -w '%{http_code}' https://elk.50.internal.kr/ 2>/dev/null"])
+        .args(["-c", &check_cmd])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).contains("302") || String::from_utf8_lossy(&o.stdout).contains("200"))
         .unwrap_or(false);
     if route_ok {
-        println!("  ✓ elk.50.internal.kr 접근 가능");
+        println!("  ✓ {elk_host} 접근 가능");
     } else {
         println!("  라우트 추가 중...");
         common::run("pxi", &["run", "traefik", "add",
             "--name", "elk",
-            "--domain", "elk.50.internal.kr",
+            "--domain", &elk_host,
             "--backend", &format!("http://{}:5601", ELK_IP)]);
         println!("  ✓ 라우트 추가됨");
     }
@@ -226,7 +237,7 @@ if entry not in data.get('translations', []):
     println!("  ✓ 재시작 완료 (1-2분 후 접속 가능)");
 
     println!("\n=== 완료 ===");
-    println!("  URL: https://elk.50.internal.kr");
+    println!("  URL: https://{elk_host}");
     println!("  진단: pxi run elk doctor");
     Ok(())
 }
@@ -300,11 +311,16 @@ fn doctor() {
     let ko_exists = pct_exec(ELK_VMID, "test -f /usr/share/kibana/node_modules/@kbn/translations-plugin/translations/ko-KR.json && echo yes");
     println!("  {} ko-KR.json", if ko_exists.trim() == "yes" { "✓" } else { "✗ 없음 — homelab-i18n/kibana/deploy.sh" });
 
-    // 8. Traefik route
+    // 8. Traefik route — host 동적 구성
+    let zone = pxi_core::config::Config::load()
+        .map(|c| c.network.internal_zone_pve())
+        .unwrap_or_else(|_| "50.internal.kr".into());
+    let elk_host = format!("elk.{zone}");
+    let check_cmd = format!("curl -sf --max-time 3 -o /dev/null https://{elk_host}/ 2>/dev/null");
     let route_ok = Command::new("bash")
-        .args(["-c", "curl -sf --max-time 3 -o /dev/null https://elk.50.internal.kr/ 2>/dev/null"])
+        .args(["-c", &check_cmd])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    println!("  {} Traefik 라우트 (elk.50.internal.kr)", if route_ok { "✓" } else { "✗" });
+    println!("  {} Traefik 라우트 ({elk_host})", if route_ok { "✓" } else { "✗" });
 }

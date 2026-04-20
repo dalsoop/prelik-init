@@ -30,9 +30,26 @@ pub struct NetworkConfig {
     pub gateway: String,
     #[serde(default = "default_subnet")]
     pub subnet: u8,
+    /// 내부 서비스 도메인 접미사 (fallback: "internal.kr").
+    /// 공개 호스트는 관례상 `{subnet_number}.{internal_suffix}` = `50.internal.kr`.
+    #[serde(default = "default_internal_suffix")]
+    pub internal_suffix: String,
 }
 
 fn default_subnet() -> u8 { 16 }
+fn default_internal_suffix() -> String { "internal.kr".into() }
+
+impl NetworkConfig {
+    /// `{subnet_num}.{internal_suffix}` — pve subnet 에서 "50.internal.kr",
+    /// ranode 에서 "60.internal.kr" 같이 사용.
+    pub fn internal_zone(&self, subnet_num: u8) -> String {
+        format!("{}.{}", subnet_num, self.internal_suffix)
+    }
+    /// 관례상 기본 50 서브넷 존. pve 쪽 도메인.
+    pub fn internal_zone_pve(&self) -> String {
+        self.internal_zone(50)
+    }
+}
 
 /// LXC 생성 기본값. pxi-lxc create 가 default_value 하드코딩 대신 여기서 로드.
 /// 도메인별 override 가 필요한 쪽 (xdesktop 무거움, wordpress MariaDB 등) 은 자기 기본값 유지.

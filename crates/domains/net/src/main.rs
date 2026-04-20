@@ -128,7 +128,7 @@ fn parse_ip_addr_brief(text: &str) -> Vec<Iface> {
 }
 
 fn interfaces(json: bool) -> anyhow::Result<()> {
-    let out = common::run("ip", &["-br", "address"])?;
+    let out = common::run_str("ip", &["-br", "address"])?;
     if !json {
         println!("=== 인터페이스 ===\n{out}");
         return Ok(());
@@ -165,7 +165,7 @@ fn parse_ip_route(text: &str) -> Vec<Route> {
 }
 
 fn routes(json: bool) -> anyhow::Result<()> {
-    let out = common::run("ip", &["route"])?;
+    let out = common::run_str("ip", &["route"])?;
     if !json {
         println!("=== 라우팅 테이블 ===\n{out}");
         return Ok(());
@@ -181,7 +181,7 @@ fn bridges(json: bool) -> anyhow::Result<()> {
     if !common::has_cmd("ip") {
         anyhow::bail!("ip 바이너리 없음");
     }
-    let names_out = common::run("ip", &["-br", "link", "show", "type", "bridge"])?;
+    let names_out = common::run_str("ip", &["-br", "link", "show", "type", "bridge"])?;
     let bridge_names: Vec<String> = names_out.lines()
         .filter_map(|l| l.split_whitespace().next().map(|s| s.split('@').next().unwrap_or(s).to_string()))
         .collect();
@@ -644,14 +644,17 @@ fn ingress_audit() -> anyhow::Result<()> {
         issues += 1;
     }
 
-    // DNS
+    // DNS — config.toml 의 network.internal_suffix 기준 (fallback: 50.internal.kr)
     print!("  [4/4] DNS: ");
     if common::has_cmd("dig") {
-        let dns_ip = cmd_output("dig", &["+short", "50.internal.kr", "@1.1.1.1"]);
+        let zone = pxi_core::config::Config::load()
+            .map(|c| c.network.internal_zone_pve())
+            .unwrap_or_else(|_| "50.internal.kr".into());
+        let dns_ip = cmd_output("dig", &["+short", &zone, "@1.1.1.1"]);
         if !dns_ip.trim().is_empty() {
-            println!("✓ 50.internal.kr -> {}", dns_ip.trim());
+            println!("✓ {zone} -> {}", dns_ip.trim());
         } else {
-            println!("✗ DNS 해석 실패");
+            println!("✗ DNS 해석 실패 ({zone})");
             issues += 1;
         }
     } else {
