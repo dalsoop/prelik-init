@@ -9,7 +9,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ncl-gate:
+    # Nickel contract 통과 안 한 태그는 릴리스로 못 나감.
+    # ncl-validate.yml 과 동일한 pxi 쪽 검증만 — control-plane 검증은 PR CI 에만 (PAT 필요).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nickel
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -L https://github.com/tweag/nickel/releases/latest/download/nickel-x86_64-linux \
+            -o "$HOME/.local/bin/nickel"
+          chmod +x "$HOME/.local/bin/nickel"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Eval pxi ncl/*.ncl
+        run: |
+          set -e
+          fail=0
+          for f in ncl/*.ncl; do
+            echo "→ nickel eval $f"
+            if ! nickel eval "$f" > /dev/null; then
+              echo "::error file=$f::Nickel eval 실패 — 태그 릴리스 차단"
+              fail=1
+            fi
+          done
+          for f in crates/domains/*/domain.ncl; do
+            echo "→ nickel eval $f"
+            if ! nickel eval "$f" > /dev/null; then
+              echo "::error file=$f::Nickel eval 실패 — 태그 릴리스 차단"
+              fail=1
+            fi
+          done
+          exit $fail
+
   build:
+    needs: ncl-gate
     runs-on: ubuntu-latest
     strategy:
       matrix:
