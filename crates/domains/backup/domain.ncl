@@ -1,11 +1,16 @@
+let { Domain } = import "../../../ncl/contracts/domain.ncl" in
+
 {
   name = "backup",
-  description = "vzdump 기반 LXC/VM 백업 스케줄 관리",
-  tags = { product = 'infra, layer = 'remote, platform = 'proxmox },
+  description = "LXC/VM 백업 (vzdump)",
+  tags = { product = 'tool, layer = 'host, platform = 'proxmox },
   provides = [
     "backup now",
     "backup list",
-    "backup schedule-add/remove",
+    "backup schedule-add",
+    "backup schedule-list",
+    "backup schedule-remove",
     "backup restore",
+    "backup doctor"
   ],
-}
+} | Domain

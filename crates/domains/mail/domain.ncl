@@ -1,12 +1,18 @@
+let { Domain } = import "../../../ncl/contracts/domain.ncl" in
+
 {
   name = "mail",
-  description = "Maddy 발송 + Mailpit 수신 아카이브 + Postfix relay",
-  tags = { product = 'mail, layer = 'remote, platform = 'debian },
+  description = "Maddy + Mailpit + Postfix relay + CF Email Sending proxy",
+  tags = { product = 'service, layer = 'remote, platform = 'proxmox },
   requires = ["lxc"],
   provides = [
     "mail install-mailpit",
-    "mail install-maddy",
     "mail postfix-relay",
-    "mail status"
+    "mail status",
+    "mail doctor",
+    "mail setup",
+    "mail cf-proxy-install",
+    "mail cf-proxy-quota",
+    "mail cf-proxy-sync"
   ],
-}
+} | Domain

@@ -1,6 +1,14 @@
-# bootstrap 도메인 메타데이터
+let { Domain } = import "../../../ncl/contracts/domain.ncl" in
+
 {
   name = "bootstrap",
-  description = "(ncl/domains.ncl의 bootstrap 항목 참조)",
-  tags = { product = 'init, layer = 'platform, platform = 'debian },
-}
+  description = "의존성 개별/일괄 설치·제거 (apt/rust/gh/dotenvx/nickel)",
+  tags = { product = 'infra, layer = 'host, platform = 'linux },
+  provides = [
+    "bootstrap install",
+    "bootstrap remove",
+    "bootstrap doctor",
+    "bootstrap list",
+    "bootstrap manifest"
+  ],
+} | Domain

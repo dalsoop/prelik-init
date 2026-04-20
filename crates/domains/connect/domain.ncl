@@ -1,6 +1,14 @@
-# connect 도메인 메타데이터
+let { Domain } = import "../../../ncl/contracts/domain.ncl" in
+
 {
   name = "connect",
-  description = "(ncl/domains.ncl의 connect 항목 참조)",
-  tags = { product = 'init, layer = 'platform, platform = 'debian },
-}
+  description = "외부 서비스 연결 관리 (.env + dotenvx)",
+  tags = { product = 'tool, layer = 'host, platform = 'any },
+  provides = [
+    "connect set",
+    "connect remove",
+    "connect list",
+    "connect encrypt",
+    "connect doctor"
+  ],
+} | Domain

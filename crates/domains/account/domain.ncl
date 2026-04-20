@@ -1,12 +1,20 @@
+let { Domain } = import "../../../ncl/contracts/domain.ncl" in
+
 {
   name = "account",
-  description = "리눅스 계정 관리 (create/remove/list/status/ssh-key-add)",
-  tags = { product = 'init, layer = 'platform, platform = 'debian },
+  description = "리눅스 계정 관리",
+  tags = { product = 'service, layer = 'host, platform = 'linux },
   provides = [
     "account create",
     "account remove",
+    "account teardown",
     "account list",
     "account status",
     "account ssh-key-add",
+    "account roles-init",
+    "account roles-apply",
+    "account roles-status",
+    "account proxmox-silo",
+    "account doctor"
   ],
-}
+} | Domain
