@@ -39,10 +39,11 @@ enum Cmd {
     /// 메일 스택 상태 점검
     Status,
     Doctor,
-    /// 메일 서버 초기 세팅 (Maddy LXC 설치 + DNS + NAT)
+    /// 메일 서버 초기 세팅 (기존 LXC 에 Maddy 설치 + DNS + NAT).
+    /// LXC 자체는 먼저 `pxi-lxc create` 로 생성. vmid 는 `pct` 식별자로만 쓰이므로 String.
     Setup {
         #[arg(long)]
-        vmid: pxi_core::types::Vmid,
+        vmid: String,
         #[arg(long)]
         ip: String,
         #[arg(long)]
@@ -89,7 +90,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::PostfixRelay { maddy_ip, port } => postfix_relay(&maddy_ip, &port),
         Cmd::Status => { status(); Ok(()) }
         Cmd::Doctor => { doctor(); Ok(()) }
-        Cmd::Setup { vmid, ip, domain, email, password } => mail_setup(vmid.as_str(), &ip, &domain, &email, &password),
+        Cmd::Setup { vmid, ip, domain, email, password } => mail_setup(&vmid, &ip, &domain, &email, &password),
         Cmd::CfProxyInstall { vmid, binary } => cf_proxy_install(&vmid, &binary),
         Cmd::CfProxyQuota => cf_proxy_quota(),
         Cmd::CfProxySync { host, port, dry_run, status, vmid } => cf_proxy_sync(&host, &port, dry_run, status, vmid.as_deref()),
