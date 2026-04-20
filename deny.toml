@@ -25,6 +25,10 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# 워크스페이스 내부(first-party) crate 는 license 필드 명시 안 해도 무시.
+# (workspace.package.license = "MIT" 은 있지만 각 crate 수동 설정 강제를 피함.)
+private = { ignore = true }
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
