@@ -15,10 +15,12 @@ jobs:
 
       - name: Install Nickel
         run: |
+          mkdir -p "$HOME/.local/bin"
           curl -L https://github.com/tweag/nickel/releases/latest/download/nickel-x86_64-linux \
-            -o /usr/local/bin/nickel
-          chmod +x /usr/local/bin/nickel
-          nickel --version
+            -o "$HOME/.local/bin/nickel"
+          chmod +x "$HOME/.local/bin/nickel"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/nickel" --version
 
       - name: Eval pxi ncl/*.ncl
         run: |
@@ -61,11 +63,14 @@ jobs:
             echo "has_token=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout control-plane
+      - name: Checkout control-plane (pinned ref)
         if: steps.guard.outputs.has_token == 'true'
         uses: actions/checkout@v4
         with:
           repository: dalsoop/control-plane
+          # vars.CONTROL_PLANE_REF 로 특정 SHA/tag pin (없으면 main 기본)
+          # codex #44 P2: 외부 repo floating HEAD 가 gate 되는 문제 회피.
+          ref: ${{ vars.CONTROL_PLANE_REF || 'main' }}
           path: control-plane
           token: ${{ secrets.GH_READ_TOKEN }}
 
