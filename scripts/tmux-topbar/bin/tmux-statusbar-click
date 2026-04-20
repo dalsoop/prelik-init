@@ -5,7 +5,16 @@ range="${1:-}"
 
 case "$range" in
     _settings)
-        tmux new-window -n tmux-topbar tmux-topbar
+        # 모든 세션에서 tmux-topbar 윈도우를 찾고, 있으면 그리 전환. 없으면 새 창 생성.
+        # 윈도우 이름(`-` 포함) 을 패턴이 아닌 리터럴로 매치하기 위해 target 에
+        # `=` 접두사 사용. window_id(`@N`) 로 바로 받으면 이름 매칭 필요 없음.
+        wid=$(tmux list-windows -a -F '#{window_id} #{window_name}' 2>/dev/null \
+            | awk '$2=="tmux-topbar"{print $1; exit}')
+        if [ -n "$wid" ]; then
+            tmux select-window -t "$wid"
+        else
+            tmux new-window -n tmux-topbar tmux-topbar
+        fi
         exit 0
         ;;
 esac
