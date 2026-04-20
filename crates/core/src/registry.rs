@@ -1,8 +1,12 @@
 //! 도메인 레지스트리 — ncl/domains.ncl → locale.json → runtime.
 //!
-//! locale.json 이 유일한 SSOT 소스. 없거나 format_version 미지원이면 **hard-fail**
-//! (codex #47 P1): silent degrade 방지. fresh clone 이면 `scripts/install-local.sh`
-//! 를 먼저 실행해 locale.json 을 생성.
+//! 로드 tier (우선순위):
+//!   1) `paths::locale_json()` 파일시스템 — install-local.sh / release tarball 이 배치
+//!   2) 빌드 시 embed 된 locale.json — build.rs 가 `nickel export` 로 생성
+//!   3) hard-fail
+//!
+//! Tier 1 은 사용자가 수정할 수 있는 경로, tier 2 는 바이너리에 구워진 보증.
+//! 둘 다 동일한 `SUPPORTED_FORMAT_VERSION` 검사 대상.
 //!
 //! Runtime 에 nickel CLI 의존성 없음.
 
@@ -12,6 +16,11 @@ use std::collections::BTreeMap;
 /// Registry 가 이해하는 locale.json 포맷 버전. 여기를 벗어나면 load() 가 hard-fail.
 /// 새 버전 추가 시 `match` 암(arm) 로 graceful migration 작성.
 const SUPPORTED_FORMAT_VERSION: u32 = 1;
+
+/// build.rs 가 `nickel export ncl/domains.ncl` 결과를 OUT_DIR/locale.json 으로 기록.
+/// nickel 미설치 빌드 환경에서는 empty JSON(`{}`) 이 기록되고, `from_str` 파싱이
+/// format_version 검사에서 실패 → tier 3 hard-fail.
+const EMBEDDED_LOCALE_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/locale.json"));
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Registry {
@@ -49,24 +58,38 @@ fn default_true() -> bool { true }
 
 impl Registry {
     pub fn load() -> anyhow::Result<Self> {
-        let path = crate::paths::locale_json()?;
-        if !path.exists() {
-            anyhow::bail!(
-                "locale.json 이 없음 ({}). fresh clone 이면 다음을 먼저 실행:\n  \
-                 scripts/install-local.sh\n\
-                 릴리스 tarball 사용 시 install.sh 가 자동 배치해야 함 — 누락이면 버그.",
-                path.display()
-            );
+        // Tier 1: 파일시스템 locale.json
+        if let Ok(path) = crate::paths::locale_json() {
+            if path.exists() {
+                let raw = std::fs::read_to_string(&path)
+                    .map_err(|e| anyhow::anyhow!("{} 읽기 실패: {e}", path.display()))?;
+                return Self::parse_with_version(&raw, &path.display().to_string());
+            }
         }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("{} 읽기 실패: {e}", path.display()))?;
-        let reg: Registry = serde_json::from_str(&raw)
-            .map_err(|e| anyhow::anyhow!("{} JSON 파싱 실패: {e}", path.display()))?;
+        // Tier 2: 바이너리에 embed 된 locale.json (build.rs 가 생성).
+        // nickel 미설치 빌드면 빈 `{}` 가 embed 되어 여기서 format_version 검사 실패 →
+        // tier 3 hard-fail 로 진행.
+        if let Ok(reg) = Self::parse_with_version(EMBEDDED_LOCALE_JSON, "<embedded>") {
+            return Ok(reg);
+        }
+        // Tier 3: hard-fail
+        anyhow::bail!(
+            "locale.json 이 없음. fresh clone 이면 다음을 먼저 실행:\n  \
+             scripts/install-local.sh\n\
+             릴리스 tarball 사용 시 install.sh 가 자동 배치해야 함. \
+             소스에서 빌드했지만 nickel 이 미설치면 embedded locale 도 없음 — \
+             'pxi run bootstrap nickel' 후 재빌드."
+        );
+    }
+
+    fn parse_with_version(raw: &str, source: &str) -> anyhow::Result<Self> {
+        let reg: Registry = serde_json::from_str(raw)
+            .map_err(|e| anyhow::anyhow!("{} JSON 파싱 실패: {e}", source))?;
         if reg.format_version != SUPPORTED_FORMAT_VERSION {
             anyhow::bail!(
                 "{} format_version={} 은 runtime 이 지원하지 않음 (supported={}). \
                  Nickel SSOT 업그레이드 또는 pxi 바이너리 업그레이드 필요.",
-                path.display(),
+                source,
                 reg.format_version,
                 SUPPORTED_FORMAT_VERSION
             );
