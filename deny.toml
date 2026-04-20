@@ -22,6 +22,8 @@ allow = [
     "OpenSSL",
     "BSL-1.0",
     "MPL-2.0",
+    # webpki-roots (ureq → pxi-license transitive) 가 CDLA 로 재라이선스됨.
+    # Community Data License Agreement Permissive 2.0 — 배포/수정 자유.
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
