@@ -38,6 +38,25 @@ pub fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// `command_exists` 별칭 (도메인 crate들의 레거시 호출 호환)
+pub fn has_cmd(cmd: &str) -> bool {
+    command_exists(cmd)
+}
+
+/// `bash -c <cmd>` 실행 — stdout 캡처 (에러 시 stderr 포함)
+pub fn run_bash(cmd: &str) -> Result<String> {
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .with_context(|| format!("bash -c 실행 실패: {cmd}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("bash 실패 ({}): {}", cmd, stderr);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// pct exec 래퍼 — LXC 안에서 명령 실행 (stdout 캡처)
 pub fn pct_exec(vmid: &str, cmd_args: &[&str]) -> Result<String> {
     let mut args = vec!["exec", vmid, "--"];
