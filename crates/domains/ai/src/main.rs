@@ -422,6 +422,20 @@ enum Cmd {
         apply: bool,
     },
 
+    // ── Claude Code 토큰 효율 튜닝 ──
+
+    /// Claude Code settings.json 을 토큰 효율 프로파일로 전환. 백업 자동 생성.
+    ClaudeTune {
+        /// 변경 요약만 출력, 실제 쓰기 없음
+        #[arg(long)]
+        dry_run: bool,
+        /// 최신 백업으로 복원
+        #[arg(long)]
+        revert: bool,
+    },
+    /// Claude Code 현재 설정 + MCP/플러그인 진단. 예상 턴당 토큰 추정.
+    ClaudeStatus,
+
     // ── OpenClaw ──
 
     /// OpenClaw LXC 전체 세팅
@@ -649,6 +663,10 @@ fn main() -> anyhow::Result<()> {
             comfyui_cleanup(&node, vmid.as_deref(), apply);
             Ok(())
         }
+        // Claude Code 토큰 튜닝
+        Cmd::ClaudeTune { dry_run, revert } => claude_tune(dry_run, revert),
+        Cmd::ClaudeStatus => claude_status(),
+
         // OpenClaw
         Cmd::OpenclawSetup { vmid } => {
             openclaw_setup(&vmid);
@@ -3606,4 +3624,215 @@ console.log("ok");
     if !ok {
         eprintln!("[openclaw] LXC {vmid} 모델 기본값 적용 실패: {out}");
     }
+}
+
+// ========== Claude Code 토큰 효율 튜닝 ==========
+
+/// 권장 프로파일 — 2026-04 기준 Claude Opus 4.7 + Claude Code 2.1.x.
+/// 근거: https://code.claude.com/docs/en/settings, 커뮤니티 실측 (최대 28% 턴당 토큰 절감).
+fn tune_profile() -> serde_json::Value {
+    serde_json::json!({
+        "includeGitInstructions": false,
+        "attribution": { "commit": "", "pr": "" },
+        "awaySummaryEnabled": false,
+        "spinnerTipsEnabled": false,
+        "skillListingBudgetFraction": 0.005,
+        "env": {
+            "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+            "DISABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_GLOB_NO_IGNORE": "false"
+        }
+    })
+}
+
+fn settings_path() -> anyhow::Result<std::path::PathBuf> {
+    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME 미설정"))?;
+    Ok(std::path::PathBuf::from(home).join(".claude").join("settings.json"))
+}
+
+fn claude_tune(dry_run: bool, revert: bool) -> anyhow::Result<()> {
+    let path = settings_path()?;
+    if !path.exists() {
+        anyhow::bail!("{} 없음 — Claude Code 미설치?", path.display());
+    }
+    if revert {
+        return claude_tune_revert(&path);
+    }
+    let raw = std::fs::read_to_string(&path)?;
+    let mut cur: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| anyhow::anyhow!("{} 파싱 실패: {e}", path.display()))?;
+    let profile = tune_profile();
+    let diff = tune_diff(&cur, &profile);
+    if diff.is_empty() {
+        println!("✓ 이미 권장 프로파일 적용 상태 (변경 없음)");
+        return Ok(());
+    }
+    println!("=== claude-tune 변경 내역 ({} 항목) ===", diff.len());
+    for (key, (before, after)) in &diff {
+        println!("  {key}:");
+        println!("    before: {before}");
+        println!("    after:  {after}");
+    }
+    if dry_run {
+        println!("\n(dry-run — 실제 쓰기 없음. 적용하려면 --dry-run 빼고 재실행)");
+        return Ok(());
+    }
+    // 백업 → merge 적용
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = path.with_extension(format!("json.pxi-backup-{ts}"));
+    std::fs::copy(&path, &backup)?;
+    tune_merge(&mut cur, &profile);
+    let out = serde_json::to_string_pretty(&cur)?;
+    std::fs::write(&path, out + "\n")?;
+    println!("\n✓ 적용 완료");
+    println!("  백업: {}", backup.display());
+    println!("  복원: pxi run ai claude-tune --revert");
+    Ok(())
+}
+
+fn claude_tune_revert(path: &std::path::Path) -> anyhow::Result<()> {
+    // 가장 최신 백업 찾기
+    let dir = path.parent().ok_or_else(|| anyhow::anyhow!("parent dir 없음"))?;
+    let stem = path.file_name().and_then(|s| s.to_str()).unwrap_or("settings.json");
+    let mut backups: Vec<std::path::PathBuf> = std::fs::read_dir(dir)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.starts_with(&format!("{stem}.pxi-backup-")))
+                .unwrap_or(false)
+        })
+        .collect();
+    backups.sort();
+    let latest = backups.pop().ok_or_else(|| anyhow::anyhow!("백업 없음"))?;
+    std::fs::copy(&latest, path)?;
+    println!("✓ 복원 완료: {} → {}", latest.display(), path.display());
+    Ok(())
+}
+
+/// profile 의 각 필드를 cur 에 재귀적으로 덮어씀 (env 같은 중첩 객체는 merge).
+fn tune_merge(cur: &mut serde_json::Value, profile: &serde_json::Value) {
+    if let (Some(cur_obj), Some(prof_obj)) = (cur.as_object_mut(), profile.as_object()) {
+        for (k, v) in prof_obj {
+            match (cur_obj.get_mut(k), v.is_object()) {
+                (Some(existing), true) if existing.is_object() => tune_merge(existing, v),
+                _ => {
+                    cur_obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+}
+
+/// profile vs cur 비교 — before/after 문자열 diff 목록.
+fn tune_diff(
+    cur: &serde_json::Value,
+    profile: &serde_json::Value,
+) -> Vec<(String, (String, String))> {
+    let mut out = Vec::new();
+    tune_diff_inner("", cur, profile, &mut out);
+    out
+}
+
+fn tune_diff_inner(
+    prefix: &str,
+    cur: &serde_json::Value,
+    profile: &serde_json::Value,
+    out: &mut Vec<(String, (String, String))>,
+) {
+    if let Some(prof_obj) = profile.as_object() {
+        for (k, v) in prof_obj {
+            let key = if prefix.is_empty() {
+                k.clone()
+            } else {
+                format!("{prefix}.{k}")
+            };
+            let existing = cur.as_object().and_then(|o| o.get(k));
+            if v.is_object() && existing.map(|e| e.is_object()).unwrap_or(false) {
+                tune_diff_inner(&key, existing.unwrap(), v, out);
+            } else {
+                let before = existing.map(|e| e.to_string()).unwrap_or_else(|| "<unset>".into());
+                let after = v.to_string();
+                if before != after {
+                    out.push((key, (before, after)));
+                }
+            }
+        }
+    }
+}
+
+fn claude_status() -> anyhow::Result<()> {
+    let path = settings_path()?;
+    if !path.exists() {
+        println!("✗ {} 없음 — Claude Code 미설치?", path.display());
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(&path)?;
+    let cfg: serde_json::Value = serde_json::from_str(&raw)?;
+    let profile = tune_profile();
+    let diff = tune_diff(&cfg, &profile);
+
+    println!("=== Claude Code 토큰 효율 상태 ===");
+    println!();
+    println!("[권장 프로파일 적용 여부]");
+    if diff.is_empty() {
+        println!("  ✓ 권장값 전부 적용됨");
+    } else {
+        for (key, (before, after)) in &diff {
+            println!("  ✗ {key}: 현재 {before} / 권장 {after}");
+        }
+    }
+
+    // 플러그인
+    println!();
+    println!("[enabledPlugins]");
+    if let Some(plugins) = cfg.get("enabledPlugins").and_then(|v| v.as_object()) {
+        for (name, enabled) in plugins {
+            let flag = if enabled == &serde_json::Value::Bool(true) {
+                "✓"
+            } else {
+                "·"
+            };
+            println!("  {flag} {name}");
+        }
+    }
+
+    // MCP count (claude mcp list 출력 파싱)
+    println!();
+    println!("[MCP 서버 — `claude mcp list`]");
+    match std::process::Command::new("claude").args(["mcp", "list"]).output() {
+        Ok(o) if o.status.success() => {
+            let out = String::from_utf8_lossy(&o.stdout);
+            let connected = out.lines().filter(|l| l.contains("✓ Connected")).count();
+            let failed = out.lines().filter(|l| l.contains("✗ Failed")).count();
+            let auth = out.lines().filter(|l| l.contains("Needs authentication")).count();
+            println!("  connected: {connected}");
+            println!("  failed:    {failed}");
+            println!("  needs auth: {auth}");
+            if cfg
+                .get("env")
+                .and_then(|e| e.get("ENABLE_CLAUDEAI_MCP_SERVERS"))
+                .and_then(|v| v.as_str())
+                == Some("false")
+            {
+                println!("  (ENABLE_CLAUDEAI_MCP_SERVERS=false — claude.ai MCP 런타임 주입 OFF)");
+            }
+        }
+        _ => println!("  (claude CLI 실행 실패 — skip)"),
+    }
+
+    // 추정 예상 토큰
+    println!();
+    println!("[턴당 추정 영향 (대략)]");
+    println!("  includeGitInstructions=false:  ~200 tokens 절감 / turn");
+    println!("  ENABLE_CLAUDEAI_MCP_SERVERS=false: ~30K tokens 절감 / turn (MCP 수에 비례)");
+    println!("  octo plugin disable:           ~15K tokens 절감 / turn");
+    println!("  skillListingBudgetFraction=0.005: skill 리스팅 할당 절반화");
+    println!("  spinnerTipsEnabled=false:      소폭 (~수백 tokens)");
+
+    Ok(())
 }
