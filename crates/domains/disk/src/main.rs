@@ -66,14 +66,37 @@ fn info() -> anyhow::Result<()> {
 
 fn resize_root(size: &str, vg: &str, dry_run: bool) -> anyhow::Result<()> {
     let lv_path = format!("/dev/{vg}/root");
-    println!("=== Root LV 확장: {lv_path} ({size}) ===");
+    let (is_inc, req_gib) = parse_size_spec(size)?;
 
-    let vfree = common::run_capture(
-        "vgs",
-        &["--noheadings", "-o", "vg_free", "--units", "g", vg],
-    )
-    .unwrap_or_default();
-    println!("VG {vg} 여유: {}", vfree.trim());
+    let current_gib = lv_size_gib(&lv_path)
+        .map_err(|e| anyhow::anyhow!("{} 크기 조회 실패: {}\n(LV 존재 확인: lvs {})", lv_path, e, vg))?;
+    let vg_free_gib = vg_free_gib(vg)?;
+
+    let delta_gib = if is_inc {
+        req_gib as f64
+    } else {
+        req_gib as f64 - current_gib
+    };
+
+    println!("=== Root LV 확장 점검 ===");
+    println!("  LV           : {lv_path}");
+    println!("  현재 크기    : {:.2} G", current_gib);
+    println!("  요청         : {} ({})", size, if is_inc { "증분" } else { "절대" });
+    println!("  필요 추가분  : {:.2} G", delta_gib);
+    println!("  VG {vg} 여유 : {:.2} G", vg_free_gib);
+
+    if delta_gib <= 0.0 {
+        anyhow::bail!(
+            "요청 크기({:.2} G)가 현재 크기({:.2} G) 이하 — 온라인 축소는 지원 안 함.",
+            req_gib as f64, current_gib
+        );
+    }
+    if delta_gib > vg_free_gib {
+        anyhow::bail!(
+            "VG {} 여유({:.2} G) 부족 — 필요 {:.2} G.\n  해결: (a) 물리 디스크 추가 후 vgextend, (b) 씬풀/스냅샷 정리, (c) 증분 크기 줄이기 (예: +{:.0}G)",
+            vg, vg_free_gib, delta_gib, vg_free_gib.floor().max(1.0)
+        );
+    }
 
     if dry_run {
         println!("\n(dry-run) 실행 예정:");
@@ -101,17 +124,45 @@ fn expand_swap(total: &str, vg: &str, dry_run: bool) -> anyhow::Result<()> {
         .filter_map(|l| l.trim().parse::<u64>().ok())
         .sum();
     let current_gib = current_bytes / (1024 * 1024 * 1024);
-    println!("현재 swap: {current_gib}G  /  목표: {target_gib}G");
+
+    let vg_free_gib_val = vg_free_gib(vg)?;
+    let other_vgs = other_vgs_with_space(vg).unwrap_or_default();
+
+    println!("=== Swap 확장 점검 ===");
+    println!("  현재 swap    : {} G", current_gib);
+    println!("  목표         : {} G", target_gib);
+    println!("  VG {vg} 여유 : {:.2} G", vg_free_gib_val);
 
     if current_gib >= target_gib {
         println!("이미 목표 이상. 아무것도 하지 않음.");
         return Ok(());
     }
     let delta = target_gib - current_gib;
+    println!("  필요 추가분  : {} G", delta);
+
+    if (delta as f64) > vg_free_gib_val {
+        let mut msg = format!(
+            "VG {} 여유({:.2} G) 부족 — 필요 {} G.",
+            vg, vg_free_gib_val, delta
+        );
+        if !other_vgs.is_empty() {
+            msg.push_str("\n  다른 VG 후보:");
+            for (name, free) in &other_vgs {
+                if *free >= delta as f64 {
+                    msg.push_str(&format!("\n    --vg {} (여유 {:.2} G) ✓", name, free));
+                } else {
+                    msg.push_str(&format!("\n    --vg {} (여유 {:.2} G — 여전히 부족)", name, free));
+                }
+            }
+        } else {
+            msg.push_str("\n  해결: (a) 물리 디스크 추가 후 vgextend, (b) --total 을 더 낮게");
+        }
+        anyhow::bail!(msg);
+    }
 
     let lv_name = next_swap_lv_name(vg)?;
     let lv_path = format!("/dev/{vg}/{lv_name}");
-    println!("추가할 swap LV: {lv_path} (+{delta}G)");
+    println!("  추가할 LV    : {lv_path} (+{delta}G)");
 
     if dry_run {
         println!("\n(dry-run) 실행 예정:");
@@ -152,6 +203,59 @@ fn parse_gib(s: &str) -> anyhow::Result<u64> {
         .or_else(|| up.strip_suffix('G'))
         .ok_or_else(|| anyhow::anyhow!("크기는 G/GB/GiB 단위로 지정 (예: 40G)"))?;
     Ok(stripped.trim().parse()?)
+}
+
+/// "+15G" → (true, 15), "150G" → (false, 150)
+fn parse_size_spec(spec: &str) -> anyhow::Result<(bool, u64)> {
+    let s = spec.trim();
+    let (is_inc, rest) = match s.strip_prefix('+') {
+        Some(r) => (true, r),
+        None => (false, s),
+    };
+    Ok((is_inc, parse_gib(rest)?))
+}
+
+/// VG 여유 공간 (GiB, 소수점)
+fn vg_free_gib(vg: &str) -> anyhow::Result<f64> {
+    let out = common::run_capture(
+        "vgs",
+        &["--noheadings", "-o", "vg_free", "--units", "b", "--nosuffix", vg],
+    )?;
+    let bytes: u64 = out.trim().parse()
+        .map_err(|_| anyhow::anyhow!("VG {} 여유 공간 조회 실패 (출력: {})", vg, out.trim()))?;
+    Ok(bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+/// LV 크기 (GiB, 소수점)
+fn lv_size_gib(lv_path: &str) -> anyhow::Result<f64> {
+    let out = common::run_capture(
+        "lvs",
+        &["--noheadings", "-o", "lv_size", "--units", "b", "--nosuffix", lv_path],
+    )?;
+    let bytes: u64 = out.trim().parse()
+        .map_err(|_| anyhow::anyhow!("LV {} 크기 조회 실패", lv_path))?;
+    Ok(bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+/// 현재 VG 외에 공간이 있는 다른 VG 목록
+fn other_vgs_with_space(exclude: &str) -> anyhow::Result<Vec<(String, f64)>> {
+    let out = common::run_capture(
+        "vgs",
+        &["--noheadings", "-o", "vg_name,vg_free", "--units", "b", "--nosuffix"],
+    )?;
+    let mut result = Vec::new();
+    for line in out.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 { continue; }
+        if parts[0] == exclude { continue; }
+        if let Ok(bytes) = parts[1].parse::<u64>() {
+            let gib = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+            if gib > 0.5 {
+                result.push((parts[0].to_string(), gib));
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn next_swap_lv_name(vg: &str) -> anyhow::Result<String> {
