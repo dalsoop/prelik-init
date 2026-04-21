@@ -435,6 +435,10 @@ enum Cmd {
     },
     /// Claude Code 현재 설정 + MCP/플러그인 진단. 예상 턴당 토큰 추정.
     ClaudeStatus,
+    /// Claude Code 환경 진단 — 바이너리/버전/settings/MCP/플러그인/메모리/스킬 전수.
+    ClaudeDoctor,
+    /// OpenAI Codex CLI 환경 진단 — 바이너리/버전/config/인증/MCP.
+    CodexDoctor,
 
     // ── OpenClaw ──
 
@@ -663,9 +667,11 @@ fn main() -> anyhow::Result<()> {
             comfyui_cleanup(&node, vmid.as_deref(), apply);
             Ok(())
         }
-        // Claude Code 토큰 튜닝
+        // Claude Code 토큰 튜닝 / 진단
         Cmd::ClaudeTune { dry_run, revert } => claude_tune(dry_run, revert),
         Cmd::ClaudeStatus => claude_status(),
+        Cmd::ClaudeDoctor => claude_doctor(),
+        Cmd::CodexDoctor => codex_doctor(),
 
         // OpenClaw
         Cmd::OpenclawSetup { vmid } => {
@@ -3840,4 +3846,216 @@ fn claude_status() -> anyhow::Result<()> {
     println!("  spinnerTipsEnabled=false:      소폭 (~수백 tokens)");
 
     Ok(())
+}
+
+// ========== Claude / Codex Doctor ==========
+
+fn claude_doctor() -> anyhow::Result<()> {
+    use std::process::Command;
+    println!("=== Claude Code Doctor ===\n");
+
+    // 1) 바이너리 + 버전
+    let claude_bin = Command::new("which").arg("claude").output();
+    match claude_bin {
+        Ok(o) if o.status.success() => {
+            let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            print!("  ✓ claude: {path}");
+            if let Ok(v) = Command::new("claude").arg("--version").output() {
+                let s = String::from_utf8_lossy(&v.stdout).trim().to_string();
+                print!("  ({s})");
+            }
+            println!();
+        }
+        _ => println!("  ✗ claude 바이너리 없음 — https://docs.claude.com/claude-code 참고"),
+    }
+
+    // 2) settings.json
+    let home = std::env::var("HOME").unwrap_or_default();
+    let settings = std::path::PathBuf::from(&home).join(".claude/settings.json");
+    if !settings.exists() {
+        println!("  ✗ {} 없음", settings.display());
+    } else {
+        let raw = std::fs::read_to_string(&settings).unwrap_or_default();
+        let cfg: serde_json::Value = serde_json::from_str(&raw)
+            .unwrap_or(serde_json::Value::Null);
+        // 토큰 프로파일 적용 여부
+        let profile = tune_profile();
+        let diff = tune_diff(&cfg, &profile);
+        if diff.is_empty() {
+            println!("  ✓ settings.json: claude-tune 권장 프로파일 100% 적용");
+        } else {
+            println!("  ⚠ settings.json: claude-tune 권장 {} 항목 미적용", diff.len());
+            for (k, _) in &diff {
+                println!("      - {k}");
+            }
+        }
+        // plugin 개수
+        if let Some(plugins) = cfg.get("enabledPlugins").and_then(|v| v.as_object()) {
+            let enabled: Vec<&String> = plugins
+                .iter()
+                .filter_map(|(k, v)| if v == &serde_json::Value::Bool(true) { Some(k) } else { None })
+                .collect();
+            let disabled: Vec<&String> = plugins
+                .iter()
+                .filter_map(|(k, v)| if v == &serde_json::Value::Bool(false) { Some(k) } else { None })
+                .collect();
+            println!("  · 플러그인: {} enabled / {} disabled", enabled.len(), disabled.len());
+            for p in &enabled { println!("      ✓ {p}"); }
+        }
+    }
+
+    // 3) MCP 연결 상태
+    match Command::new("claude").args(["mcp", "list"]).output() {
+        Ok(o) if o.status.success() => {
+            let out = String::from_utf8_lossy(&o.stdout);
+            let connected = out.lines().filter(|l| l.contains("Connected")).count();
+            let failed = out.lines().filter(|l| l.contains("Failed")).count();
+            let no_cfg = out.contains("No MCP servers configured");
+            if no_cfg {
+                println!("  ✓ MCP: 설정 없음 (토큰 효율 최대)");
+            } else {
+                println!("  · MCP: connected={connected} failed={failed}");
+            }
+        }
+        _ => println!("  · MCP: 조회 실패"),
+    }
+
+    // 4) auto memory + session 로그 (구분)
+    let projects = std::path::PathBuf::from(&home).join(".claude/projects");
+    if projects.exists() {
+        let mut mem_total: u64 = 0;
+        let mut mem_files: u64 = 0;
+        let mut sess_total: u64 = 0;
+        let mut sess_files: u64 = 0;
+        if let Ok(entries) = std::fs::read_dir(&projects) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if !p.is_dir() { continue; }
+                let memdir = p.join("memory");
+                if memdir.exists() {
+                    walk_size(&memdir, &mut mem_total, &mut mem_files);
+                }
+                if let Ok(inner) = std::fs::read_dir(&p) {
+                    for ie in inner.flatten() {
+                        let ip = ie.path();
+                        if ip.file_name().and_then(|n| n.to_str()) == Some("memory") { continue; }
+                        if ip.is_dir() {
+                            walk_size(&ip, &mut sess_total, &mut sess_files);
+                        } else if let Ok(m) = ie.metadata() {
+                            sess_total += m.len();
+                            sess_files += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("  · auto memory: {mem_files} 파일, {:.1}KB (매 세션 MEMORY.md 인덱스 주입)",
+            mem_total as f64 / 1024.0);
+        println!("  · session 로그: {sess_files} 파일, {:.1}MB (cleanupPeriodDays 로 보존 조절)",
+            sess_total as f64 / (1024.0 * 1024.0));
+    }
+
+    // 5) 스킬 개수
+    let skills_dir = std::path::PathBuf::from(&home).join(".claude/skills");
+    if skills_dir.exists() {
+        let count = std::fs::read_dir(&skills_dir)
+            .map(|it| it.flatten().filter(|e| e.path().is_dir()).count())
+            .unwrap_or(0);
+        println!("  · 스킬: {count}개 (description 매 세션 주입)");
+    }
+
+    println!("\n복구:");
+    println!("  pxi run ai claude-tune          # 권장 프로파일 적용");
+    println!("  pxi run ai claude-tune --revert # 백업에서 복원");
+    println!("  pxi run ai claude-status        # 상세 진단");
+    Ok(())
+}
+
+fn codex_doctor() -> anyhow::Result<()> {
+    use std::process::Command;
+    println!("=== OpenAI Codex CLI Doctor ===\n");
+
+    // 1) 바이너리 + 버전
+    match Command::new("which").arg("codex").output() {
+        Ok(o) if o.status.success() => {
+            let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            print!("  ✓ codex: {path}");
+            if let Ok(v) = Command::new("codex").arg("--version").output() {
+                let s = String::from_utf8_lossy(&v.stdout).trim().to_string();
+                print!("  ({s})");
+            }
+            println!();
+        }
+        _ => {
+            println!("  ✗ codex 바이너리 없음 — npm i -g @openai/codex 또는 Claude Code codex plugin 설치");
+            return Ok(());
+        }
+    }
+
+    // 2) ~/.codex/config.toml
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config = std::path::PathBuf::from(&home).join(".codex/config.toml");
+    if !config.exists() {
+        println!("  ⚠ {} 없음 (codex 첫 실행 시 생성됨)", config.display());
+    } else {
+        println!("  ✓ config: {}", config.display());
+        if let Ok(raw) = std::fs::read_to_string(&config) {
+            // 토큰 효율 주요 설정 확인
+            let has_features_off = raw.contains("features.apps = false") || raw.contains("[features]\napps = false");
+            let has_web_search_off = raw.contains("web_search = \"disabled\"");
+            let has_tool_limit = raw.contains("tool_output_token_limit");
+            print_flag("features.apps = false", has_features_off);
+            print_flag("web_search = \"disabled\"", has_web_search_off);
+            print_flag("tool_output_token_limit 설정", has_tool_limit);
+        }
+    }
+
+    // 3) auth
+    let auth_file = std::path::PathBuf::from(&home).join(".codex/auth.json");
+    if auth_file.exists() {
+        println!("  ✓ auth: {} 존재 (ChatGPT OAuth 또는 API Key)", auth_file.display());
+    } else {
+        println!("  ⚠ auth 파일 없음 — `codex` 첫 실행 후 로그인");
+    }
+
+    // 4) codex CLI 자체 doctor/status (있으면)
+    match Command::new("codex").arg("--help").output() {
+        Ok(o) if o.status.success() => {
+            let help = String::from_utf8_lossy(&o.stdout);
+            let has_mcp = help.contains("mcp");
+            if has_mcp {
+                println!("  · codex mcp list 로 별도 MCP 확인 가능");
+            }
+        }
+        _ => {}
+    }
+
+    println!("\n권장 토큰 효율 설정 (~/.codex/config.toml):");
+    println!("  [features]");
+    println!("  apps = false");
+    println!("  [apps._default]");
+    println!("  enabled = false");
+    println!("  # web_search = \"disabled\" (로컬 작업 전용 시)");
+    println!("  tool_output_token_limit = 10000");
+
+    Ok(())
+}
+
+fn print_flag(label: &str, ok: bool) {
+    let mark = if ok { "✓" } else { "·" };
+    println!("      {mark} {label}");
+}
+
+fn walk_size(dir: &std::path::Path, total: &mut u64, files: &mut u64) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk_size(&p, total, files);
+            } else if let Ok(m) = e.metadata() {
+                *total += m.len();
+                *files += 1;
+            }
+        }
+    }
 }

@@ -39,6 +39,8 @@ let { Domain } = import "../../../ncl/contracts/domain.ncl" in
     "ai openclaw-model-defaults",
     "ai claude-tune",
     "ai claude-status",
+    "ai claude-doctor",
+    "ai codex-doctor",
     "ai cluster-files-setup",
     "ai cluster-files-sync",
     "ai cluster-files-reset",
