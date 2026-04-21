@@ -3637,10 +3637,15 @@ fn tune_profile() -> serde_json::Value {
         "awaySummaryEnabled": false,
         "spinnerTipsEnabled": false,
         "skillListingBudgetFraction": 0.005,
+        // Opus 4.7 기본값 "xhigh" 는 reasoning 과다 → 토큰 폭증.
+        // Anthropic 블로그 "low-effort 4.7 ≈ medium-effort 4.6" 벤치 기준, high 가 균형.
+        "effortLevel": "high",
         "env": {
             "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
             "DISABLE_TELEMETRY": "1",
-            "CLAUDE_CODE_GLOB_NO_IGNORE": "false"
+            "CLAUDE_CODE_GLOB_NO_IGNORE": "false",
+            // auto-compact 기본 ~95% → 70% 로 앞당김. 긴 세션에서 base context 더 오래 유지.
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "70"
         }
     })
 }
