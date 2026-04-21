@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# pxi run ai menu wrapper — tmux-topbar 같은 launcher 카드용 단축 진입점.
+# 카드 클릭 → 새 창에서 이 스크립트 → pxi 가 dialoguer TUI 표시.
+exec pxi run ai menu "$@"
