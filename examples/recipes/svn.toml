@@ -12,7 +12,7 @@ packages = ["apache2", "subversion", "libapache2-mod-svn", "apache2-utils", "cur
 
 [[install.steps]]
 name = "저장소/레이아웃 초기화"
-run = """
+run = '''
 set -euo pipefail
 
 REPO_ROOT="/srv/svn/repos"
@@ -36,11 +36,11 @@ if [ ! -d "${REPO_PATH}/db" ]; then
 fi
 
 chown -R www-data:www-data /srv/svn
-"""
+'''
 
 [[install.steps]]
 name = "게임 자산 lock 기본 규칙 적용"
-run = """
+run = '''
 set -euo pipefail
 
 REPO_PATH="/srv/svn/repos/game"
@@ -70,11 +70,11 @@ if [ "${CURRENT}" != "${DESIRED}" ]; then
   svn propset svn:auto-props "${DESIRED}" "${TMP_DIR}/trunk" >/dev/null
   svn commit -m "Add default needs-lock rules for game assets" "${TMP_DIR}/trunk" >/dev/null
 fi
-"""
+'''
 
 [[install.steps]]
 name = "SVN 권한/Apache 설정 배치"
-run = """
+run = '''
 set -euo pipefail
 
 cat > /srv/svn/conf/authz <<'EOF'
@@ -149,11 +149,11 @@ cat > /etc/apache2/conf-available/svn-game.conf <<'EOF'
     LimitXMLRequestBody 0
 </Location>
 EOF
-"""
+'''
 
 [[install.steps]]
 name = "운영 스크립트/landing page/관리자 계정"
-run = """
+run = '''
 set -euo pipefail
 
 REPO_NAME="game"
@@ -514,11 +514,11 @@ svn checkout http://${SVN_IP}/svn/${REPO_NAME}/trunk ${REPO_NAME}-trunk
 EOF
 
 chmod +x /usr/local/bin/backup-svn-game /usr/local/bin/svn-user-add
-"""
+'''
 
 [[install.steps]]
 name = "Apache enable + 검증"
-run = """
+run = '''
 set -euo pipefail
 
 a2enconf svn-game >/dev/null
@@ -531,4 +531,4 @@ svn ls --non-interactive --username admin --password "${ADMIN_PASSWORD}" http://
 systemctl is-active apache2 | grep -q '^active$'
 echo "✓ svn ready"
 echo "admin credentials: /root/.env (dotenvx-managed)"
-"""
+'''
