@@ -79,7 +79,42 @@ fn main() {
 
     // ncl/ 하위 개별 파일 rerun-if-changed (내용 변경 감지). domains.ncl / presets.ncl /
     // contracts/domain.ncl 까지 모두 포함.
-    for f in ["ncl/domains.ncl", "ncl/presets.ncl", "ncl/contracts/domain.ncl"] {
+    for f in [
+        "ncl/domains.ncl",
+        "ncl/presets.ncl",
+        "ncl/contracts/domain.ncl",
+    ] {
         println!("cargo:rerun-if-changed={}", workspace.join(f).display());
+    }
+
+    // Shared entrypoints and domain implementations should not quietly accumulate
+    // hardcoded IPs, credentials, domains, or fallback config. Repo-wide
+    // shell/repo guard runs in lefthook; build-time lint here keeps cargo check
+    // honest for Rust surfaces across the whole workspace.
+    for src in ["crates/core/src", "crates/cli/src", "crates/domains"] {
+        let path = workspace.join(src);
+        if path.exists() {
+            hardcoded_lint::check(path.to_str().expect("src path utf-8"))
+                .ipv4()
+                .credentials()
+                .env_fallback()
+                .const_config()
+                .vmid()
+                .git_url()
+                .localhost()
+                .port()
+                .domain()
+                .email()
+                .magic_number()
+                .version()
+                .retry()
+                .timezone()
+                .deny("gitlab.internal.kr", "hardcoded internal GitLab domain — use config or env")
+                .deny("10.0.50.", "hardcoded lab network IP — derive from VMID via convention::canonical_ip")
+                .deny("10.0.60.", "hardcoded ranode network IP — derive from VMID via convention::canonical_ip")
+                .deny("prelik.com", "hardcoded product domain — load from config or env")
+                .deny("internal.kr", "hardcoded internal domain — load from config or env")
+                .run();
+        }
     }
 }
