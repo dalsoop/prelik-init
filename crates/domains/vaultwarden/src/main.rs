@@ -180,6 +180,42 @@ enum Cmd {
         #[arg(long, default_value = "/root/.config/vaultwarden-cli")]
         appdata: String,
     },
+
+    /// Vaultwarden 의 homelab-env-keys 아이템에서 DOTENV_PRIVATE_KEY 값 출력 (stdout).
+    /// 스크립트에서: KEY=$(pxi run vaultwarden env-key-get)
+    EnvKeyGet {
+        #[arg(long, default_value = "/root/.config/vaultwarden-cli")]
+        appdata: String,
+        /// 꺼낼 필드명 (기본: DOTENV_PRIVATE_KEY)
+        #[arg(long, default_value = "DOTENV_PRIVATE_KEY")]
+        field: String,
+    },
+
+    /// Vaultwarden 의 homelab-env-keys 아이템 필드 값 업데이트.
+    /// 예: pxi run vaultwarden env-key-set --value <new_key>
+    EnvKeySet {
+        #[arg(long, default_value = "/root/.config/vaultwarden-cli")]
+        appdata: String,
+        #[arg(long, default_value = "DOTENV_PRIVATE_KEY")]
+        field: String,
+        /// 새 값
+        #[arg(long)]
+        value: String,
+    },
+
+    /// dotenvx 단일 마스터 키 로테이션 원샷:
+    ///   1) 새 키페어 생성
+    ///   2) rekey.sh 로 모든 .env 재암호화
+    ///   3) git commit + push
+    ///   4) GitLab 그룹 변수 DOTENV_PRIVATE_KEY 업데이트
+    ///   5) Vaultwarden homelab-env-keys 업데이트
+    EnvKeyRotate {
+        #[arg(long, default_value = "/root/.config/vaultwarden-cli")]
+        appdata: String,
+        /// 실제 변경 없이 단계만 출력
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn pct(vmid: u32, args: &[&str]) -> Result<String> {
@@ -306,6 +342,13 @@ fn main() -> Result<()> {
             dry_run,
         ),
         Cmd::BwVerify { appdata } => bw_verify(&appdata),
+        Cmd::EnvKeyGet { appdata, field } => env_key_get(&appdata, &field),
+        Cmd::EnvKeySet {
+            appdata,
+            field,
+            value,
+        } => env_key_set(&appdata, &field, &value),
+        Cmd::EnvKeyRotate { appdata, dry_run } => env_key_rotate(&appdata, dry_run),
     }
 }
 
@@ -920,4 +963,296 @@ fn bw_verify(appdata: &str) -> Result<()> {
     println!("  items  : {count}");
 
     Ok(())
+}
+
+// ── homelab-env-keys 공통 헬퍼 ──────────────────────────────────────────────
+
+const ENV_KEYS_ITEM_NAME: &str = "homelab-env-keys";
+
+/// bw 언락 세션 반환 (login --apikey + unlock 조합)
+fn bw_session(appdata: &str) -> Result<String> {
+    let url = read_env("VAULTWARDEN_URL")
+        .ok_or_else(|| anyhow!("VAULTWARDEN_URL 가 control-plane/.env 에 없음"))?;
+    let email = read_env("VAULTWARDEN_EMAIL")
+        .ok_or_else(|| anyhow!("VAULTWARDEN_EMAIL 가 control-plane/.env 에 없음"))?;
+    let password = read_env("VAULTWARDEN_MASTER_PASSWORD")
+        .ok_or_else(|| anyhow!("VAULTWARDEN_MASTER_PASSWORD 가 control-plane/.env 에 없음"))?;
+    let client_id = read_env("VAULTWARDEN_CLIENT_ID")
+        .ok_or_else(|| anyhow!("VAULTWARDEN_CLIENT_ID 가 control-plane/.env 에 없음"))?;
+    let client_secret = read_env("VAULTWARDEN_CLIENT_SECRET")
+        .ok_or_else(|| anyhow!("VAULTWARDEN_CLIENT_SECRET 가 control-plane/.env 에 없음"))?;
+
+    std::fs::create_dir_all(appdata)?;
+
+    // config server (idempotent)
+    let _ = Command::new("bw")
+        .env("BITWARDENCLI_APPDATA_DIR", appdata)
+        .args(["config", "server", &url])
+        .output()?;
+
+    // login --apikey (이미 로그인돼 있으면 무시)
+    let _ = Command::new("bw")
+        .env("BITWARDENCLI_APPDATA_DIR", appdata)
+        .env("BW_CLIENTID", &client_id)
+        .env("BW_CLIENTSECRET", &client_secret)
+        .args(["login", "--apikey"])
+        .output()?;
+
+    // unlock → raw session key
+    let unlock = Command::new("bw")
+        .env("BITWARDENCLI_APPDATA_DIR", appdata)
+        .env("BW_PASSWORD", &password)
+        .args(["unlock", "--passwordenv", "BW_PASSWORD", "--raw"])
+        .output()?;
+
+    let session = String::from_utf8_lossy(&unlock.stdout).trim().to_string();
+    if session.is_empty() {
+        let err = String::from_utf8_lossy(&unlock.stderr);
+        return Err(anyhow!("bw unlock 실패: {}", err.trim()));
+    }
+    Ok(session)
+}
+
+/// 아이템 JSON 에서 특정 필드 값 추출
+fn extract_field(item_json: &str, field_name: &str) -> Option<String> {
+    // 간단한 파싱: "fields" 배열에서 name 매칭
+    let needle = format!("\"name\":\"{field_name}\"");
+    let pos = item_json.find(&needle)?;
+    // "value":"..." 를 needle 뒤에서 찾기
+    let after = &item_json[pos..];
+    let val_start = after.find("\"value\":\"")?  + "\"value\":\"".len();
+    let val_end = after[val_start..].find('"')? + val_start;
+    Some(after[val_start..val_end].to_string())
+}
+
+/// bw get item (by name) → JSON string
+fn bw_get_item(appdata: &str, session: &str, name: &str) -> Result<String> {
+    // sync 먼저
+    let _ = Command::new("bw")
+        .env("BITWARDENCLI_APPDATA_DIR", appdata)
+        .args(["sync", "--session", session])
+        .output()?;
+
+    let out = Command::new("bw")
+        .env("BITWARDENCLI_APPDATA_DIR", appdata)
+        .args(["get", "item", name, "--session", session])
+        .output()?;
+
+    let json = String::from_utf8_lossy(&out.stdout).to_string();
+    if json.trim().is_empty() || json.contains("\"message\":") {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(anyhow!("bw get item '{}' 실패: {}", name, err.trim()));
+    }
+    Ok(json)
+}
+
+// ── env-key-get ─────────────────────────────────────────────────────────────
+
+fn env_key_get(appdata: &str, field: &str) -> Result<()> {
+    let session = bw_session(appdata)?;
+    let json = bw_get_item(appdata, &session, ENV_KEYS_ITEM_NAME)?;
+    let value = extract_field(&json, field)
+        .ok_or_else(|| anyhow!("필드 '{field}' 를 {ENV_KEYS_ITEM_NAME} 에서 찾을 수 없음"))?;
+    // stdout 에만 값 출력 (스크립트 캡처용)
+    print!("{value}");
+    Ok(())
+}
+
+// ── env-key-set ─────────────────────────────────────────────────────────────
+
+fn env_key_set(appdata: &str, field: &str, value: &str) -> Result<()> {
+    let session = bw_session(appdata)?;
+    let json = bw_get_item(appdata, &session, ENV_KEYS_ITEM_NAME)?;
+
+    // Python 으로 JSON 조작 (serde_json 없이)
+    let updated = Command::new("python3")
+        .args([
+            "-c",
+            &format!(
+                r#"
+import json, sys
+d = json.loads(sys.argv[1])
+found = False
+for f in d.get('fields', []):
+    if f['name'] == sys.argv[2]:
+        f['value'] = sys.argv[3]
+        found = True
+if not found:
+    d.setdefault('fields', []).append({{'name': sys.argv[2], 'value': sys.argv[3], 'type': 1}})
+print(json.dumps(d))
+"#
+            ),
+            &json,
+            field,
+            value,
+        ])
+        .output()?;
+
+    let updated_json = String::from_utf8_lossy(&updated.stdout).to_string();
+    if updated_json.trim().is_empty() {
+        return Err(anyhow!("JSON 업데이트 실패"));
+    }
+
+    // bw encode | bw edit item <id>
+    let item_id = {
+        let id_out = Command::new("python3")
+            .args(["-c", "import json,sys; print(json.loads(sys.argv[1])['id'])", &json])
+            .output()?;
+        String::from_utf8_lossy(&id_out.stdout).trim().to_string()
+    };
+
+    let encode = Command::new("bw")
+        .env("BITWARDENCLI_APPDATA_DIR", appdata)
+        .args(["encode"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()?;
+
+    use std::io::Write;
+    let mut encode = encode;
+    encode.stdin.as_mut().unwrap().write_all(updated_json.as_bytes())?;
+    let encoded = encode.wait_with_output()?;
+    let encoded_str = String::from_utf8_lossy(&encoded.stdout).to_string();
+
+    let edit = Command::new("bw")
+        .env("BITWARDENCLI_APPDATA_DIR", appdata)
+        .args(["edit", "item", &item_id, "--session", &session])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()?;
+
+    let mut edit = edit;
+    edit.stdin.as_mut().unwrap().write_all(encoded_str.trim().as_bytes())?;
+    let result = edit.wait_with_output()?;
+
+    if result.status.success() {
+        eprintln!("✓ {ENV_KEYS_ITEM_NAME} [{field}] 업데이트 완료");
+    } else {
+        let err = String::from_utf8_lossy(&result.stderr);
+        return Err(anyhow!("bw edit 실패: {}", err.trim()));
+    }
+    Ok(())
+}
+
+// ── env-key-rotate ───────────────────────────────────────────────────────────
+
+fn env_key_rotate(appdata: &str, dry_run: bool) -> Result<()> {
+    println!("=== dotenvx 마스터 키 로테이션 ===");
+
+    let repo_root = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    let root = String::from_utf8_lossy(&repo_root.stdout).trim().to_string();
+    if root.is_empty() {
+        return Err(anyhow!("git 저장소 루트를 찾을 수 없음"));
+    }
+
+    // 1. 새 키페어 생성 (임시 .env 에 dotenvx encrypt 적용)
+    println!("\n[1/5] 새 키페어 생성");
+    let tmp_dir = std::env::temp_dir().join(format!("pxi-rekey-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir)?;
+    let tmp_env = tmp_dir.join(".env");
+    std::fs::write(&tmp_env, "PLACEHOLDER=value\n")?;
+
+    let gen = Command::new("dotenvx")
+        .arg("encrypt")
+        .arg("-f")
+        .arg(&tmp_env)
+        .output()?;
+    if !gen.status.success() {
+        return Err(anyhow!("dotenvx encrypt 실패: {}", String::from_utf8_lossy(&gen.stderr)));
+    }
+
+    let env_content = std::fs::read_to_string(&tmp_env)?;
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    let new_private_key = env_content
+        .lines()
+        .find_map(|l| l.strip_prefix("DOTENV_PRIVATE_KEY=").or_else(|| l.strip_prefix("DOTENV_PRIVATE_KEY=\"").map(|v| v.trim_end_matches('"'))))
+        .map(|v| v.trim_matches('"').to_string())
+        .ok_or_else(|| anyhow!("새 DOTENV_PRIVATE_KEY 추출 실패"))?;
+    let new_public_key = env_content
+        .lines()
+        .find_map(|l| l.strip_prefix("DOTENV_PUBLIC_KEY=").or_else(|| l.strip_prefix("DOTENV_PUBLIC_KEY=\"").map(|v| v.trim_end_matches('"'))))
+        .map(|v| v.trim_matches('"').to_string())
+        .ok_or_else(|| anyhow!("새 DOTENV_PUBLIC_KEY 추출 실패"))?;
+
+    println!("  공개키: {}", &new_public_key[..16]);
+    println!("  비밀키: {}... ({}자)", &new_private_key[..8], new_private_key.len());
+
+    if dry_run {
+        println!("\n[dry-run] 이후 단계 생략");
+        println!("  DOTENV_PRIVATE_KEY={new_private_key}");
+        println!("  DOTENV_PUBLIC_KEY={new_public_key}");
+        return Ok(());
+    }
+
+    // 2. rekey.sh 실행
+    println!("\n[2/5] rekey.sh 실행");
+    let rekey = Command::new("bash")
+        .arg(format!("{root}/control-plane/scripts/rekey.sh"))
+        .env("MASTER_PRIVATE_KEY", &new_private_key)
+        .current_dir(&root)
+        .status()?;
+    if !rekey.success() {
+        return Err(anyhow!("rekey.sh 실패"));
+    }
+
+    // 3. git commit + push
+    println!("\n[3/5] git commit + push");
+    Command::new("git")
+        .args(["add", "control-plane/envs/"])
+        .current_dir(&root)
+        .status()?;
+    let msg = format!("chore: dotenvx 마스터 키 로테이션 {}", chrono_now());
+    Command::new("git")
+        .args(["commit", "-m", &msg])
+        .current_dir(&root)
+        .status()?;
+    Command::new("git")
+        .args(["push"])
+        .current_dir(&root)
+        .status()?;
+    println!("  ✓ push 완료");
+
+    // 4. GitLab 그룹 변수 업데이트
+    println!("\n[4/5] GitLab DOTENV_PRIVATE_KEY 업데이트");
+    let gl_token = read_env("GITLAB_TOKEN")
+        .or_else(|| read_env("GITLAB_API_TOKEN"))
+        .ok_or_else(|| anyhow!("GITLAB_TOKEN 또는 GITLAB_API_TOKEN 이 control-plane/.env 에 없음"))?;
+    let gl_url = read_env("GITLAB_URL").unwrap_or_else(|| "http://10.0.50.63".to_string()); // LINT_ALLOW: GITLAB_URL 미설정 시 fallback — control-plane/.env 에 항상 있어야 함
+    let group_id = "283";
+
+    // PUT (이미 존재)
+    let resp = Command::new("curl")
+        .args([
+            "-s", "-X", "PUT",
+            &format!("{gl_url}/api/v4/groups/{group_id}/variables/DOTENV_PRIVATE_KEY"),
+            "-H", &format!("PRIVATE-TOKEN: {gl_token}"),
+            "-H", "Content-Type: application/json",
+            "-d", &format!(r#"{{"key":"DOTENV_PRIVATE_KEY","value":"{new_private_key}","masked":true,"protected":false}}"#),
+        ])
+        .output()?;
+    let resp_str = String::from_utf8_lossy(&resp.stdout);
+    if resp_str.contains("\"key\":\"DOTENV_PRIVATE_KEY\"") {
+        println!("  ✓ GitLab 변수 업데이트 완료");
+    } else {
+        eprintln!("  WARN: GitLab 응답 확인 필요: {}", resp_str.trim());
+    }
+
+    // 5. Vaultwarden 업데이트
+    println!("\n[5/5] Vaultwarden homelab-env-keys 업데이트");
+    env_key_set(appdata, "DOTENV_PRIVATE_KEY", &new_private_key)?;
+    env_key_set(appdata, "DOTENV_PUBLIC_KEY", &new_public_key)?;
+
+    println!("\n✅ 키 로테이션 완료");
+    println!("  새 공개키: {new_public_key}");
+    Ok(())
+}
+
+fn chrono_now() -> String {
+    Command::new("date")
+        .arg("+%Y-%m-%d")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown-date".to_string())
 }
