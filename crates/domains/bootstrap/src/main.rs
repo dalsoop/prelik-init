@@ -1,8 +1,12 @@
+//! pxi-bootstrap — LXC 초기 부트스트랩 (Debian 기반 공통 환경 구성).
 use clap::{Parser, Subcommand, ValueEnum};
 use pxi_core::{common, os};
 
 #[derive(Parser)]
-#[command(name = "pxi-bootstrap", about = "의존성 개별/일괄 설치·제거 (apt/rust/gh/dotenvx/nickel)")]
+#[command(
+    name = "pxi-bootstrap",
+    about = "의존성 개별/일괄 설치·제거 (apt/rust/gh/dotenvx/nickel)"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -172,23 +176,42 @@ fn manifest(tools: &[Tool], json: bool) -> anyhow::Result<()> {
     println!("⚠ 정적 카탈로그 — pxi이 깐 것인지 호스트의 다른 출처인지 구분하지 않음.");
     println!("  detected=true는 'PATH에 명령이 있다'는 뜻일 뿐 pxi 출처 보장 아님.\n");
     for (t, e) in tools.iter().zip(&entries) {
-        println!("[{}] (detected={})", t.name(), e["detected_on_host"].as_bool().unwrap_or(false));
+        println!(
+            "[{}] (detected={})",
+            t.name(),
+            e["detected_on_host"].as_bool().unwrap_or(false)
+        );
         if let Some(arr) = e["static_install_packages"].as_array() {
             if !arr.is_empty() {
-                println!("  설치 가능 apt 패키지: {}",
-                    arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "  설치 가능 apt 패키지: {}",
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
         }
         if let Some(arr) = e["binaries"].as_array() {
             if !arr.is_empty() {
-                println!("  바이너리 후보:        {}",
-                    arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "  바이너리 후보:        {}",
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
         }
         if let Some(arr) = e["files"].as_array() {
             if !arr.is_empty() {
-                println!("  부가 파일:            {}",
-                    arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "  부가 파일:            {}",
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
         }
         if let Some(w) = e["warning"].as_str() {
@@ -196,11 +219,15 @@ fn manifest(tools: &[Tool], json: bool) -> anyhow::Result<()> {
         }
         if let Some(s) = e["pxi_remove_does"].as_str() {
             println!("  pxi remove --only {} 이 실제로 하는 것:", t.name());
-            for line in s.lines() { println!("    {line}"); }
+            for line in s.lines() {
+                println!("    {line}");
+            }
         }
         if let Some(s) = e["manual_followup"].as_str() {
             println!("  사용자 수동 후속 정리 (pxi이 자동 안 함):");
-            for line in s.lines() { println!("    {line}"); }
+            for line in s.lines() {
+                println!("    {line}");
+            }
         }
         println!();
     }
@@ -210,7 +237,14 @@ fn manifest(tools: &[Tool], json: bool) -> anyhow::Result<()> {
 fn install_tools(tools: &[Tool]) -> anyhow::Result<()> {
     println!("=== pxi bootstrap install ===");
     println!("  distro: {:?}", os::Distro::detect());
-    println!("  대상: {}", tools.iter().map(|t| t.name()).collect::<Vec<_>>().join(", "));
+    println!(
+        "  대상: {}",
+        tools
+            .iter()
+            .map(|t| t.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     match os::Distro::detect() {
         os::Distro::Debian | os::Distro::Ubuntu => {}
@@ -235,7 +269,14 @@ fn install_tools(tools: &[Tool]) -> anyhow::Result<()> {
 
 fn remove_tools(tools: &[Tool]) -> anyhow::Result<()> {
     println!("=== pxi bootstrap remove ===");
-    println!("  대상: {}", tools.iter().map(|t| t.name()).collect::<Vec<_>>().join(", "));
+    println!(
+        "  대상: {}",
+        tools
+            .iter()
+            .map(|t| t.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     for t in tools {
         match t {
@@ -254,7 +295,11 @@ fn remove_tools(tools: &[Tool]) -> anyhow::Result<()> {
 fn list() {
     println!("설치 가능한 도구:");
     for t in Tool::all() {
-        let status = if common::has_cmd(t.check_cmd()) { "✓" } else { "✗" };
+        let status = if common::has_cmd(t.check_cmd()) {
+            "✓"
+        } else {
+            "✗"
+        };
         println!("  {status} {}", t.name());
     }
     println!("\n사용: pxi run bootstrap install --only rust,nickel");
@@ -265,7 +310,9 @@ fn list() {
 
 fn install_apt() -> anyhow::Result<()> {
     let pkgs = ["curl", "ca-certificates", "build-essential", "git", "jq"];
-    let missing: Vec<&str> = pkgs.iter().copied()
+    let missing: Vec<&str> = pkgs
+        .iter()
+        .copied()
         .filter(|pkg| common::run("dpkg", &["-s", pkg]).is_err())
         .collect();
     if missing.is_empty() {
@@ -273,7 +320,10 @@ fn install_apt() -> anyhow::Result<()> {
         return Ok(());
     }
     println!("  apt install: {}", missing.join(" "));
-    common::run_bash(&format!("sudo apt-get update && sudo apt-get install -y {}", missing.join(" ")))?;
+    common::run_bash(&format!(
+        "sudo apt-get update && sudo apt-get install -y {}",
+        missing.join(" ")
+    ))?;
     Ok(())
 }
 
@@ -296,14 +346,16 @@ fn install_gh() -> anyhow::Result<()> {
         return Ok(());
     }
     println!("  gh 설치 중 (Debian/Ubuntu)...");
-    common::run_bash(r#"
+    common::run_bash(
+        r#"
         set -e
         curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
           | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
           | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
         sudo apt-get update && sudo apt-get install -y gh
-    "#)?;
+    "#,
+    )?;
     Ok(())
 }
 
@@ -401,7 +453,10 @@ fn remove_nickel() -> anyhow::Result<()> {
     if path.starts_with("/usr/local/bin") {
         common::run_bash(&format!("sudo rm -f {}", path))?;
     } else if path.contains(".cargo/bin") {
-        common::run_bash("cargo uninstall nickel-lang-cli 2>/dev/null || rm -f ~/.cargo/bin/nickel").ok();
+        common::run_bash(
+            "cargo uninstall nickel-lang-cli 2>/dev/null || rm -f ~/.cargo/bin/nickel",
+        )
+        .ok();
     } else {
         eprintln!("  ⚠ 예상치 못한 경로 ({path}) — 수동 제거 필요");
     }
