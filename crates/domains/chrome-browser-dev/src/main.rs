@@ -268,6 +268,41 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         timeout_sec: u64,
     },
+    /// 빌드된 Helium을 tar.xz로 패키징하고 GitLab 릴리즈 생성
+    Release {
+        #[arg(long)]
+        vmid: String,
+        /// GitLab project ID (helium-linux)
+        #[arg(long, default_value_t = 239)]
+        project_id: u32,
+        /// GitLab API token (미지정 시 GITLAB_API_TOKEN env 사용)
+        #[arg(long)]
+        token: Option<String>,
+        /// GitLab base URL
+        #[arg(long, default_value = "https://gitlab.internal.kr")] // LINT_ALLOW: helium-linux 내부 GitLab 기본값, --gitlab-url로 override
+        gitlab_url: String,
+    },
+    /// GitLab 릴리즈에서 Helium을 내려받아 로컬에 설치
+    Install {
+        /// 설치 디렉터리
+        #[arg(long, default_value = "/opt/helium")]
+        dir: String,
+        /// bin symlink 위치
+        #[arg(long, default_value = "/usr/local/bin")]
+        bin_dir: String,
+        /// GitLab project ID
+        #[arg(long, default_value_t = 239)]
+        project_id: u32,
+        /// GitLab base URL
+        #[arg(long, default_value = "https://gitlab.internal.kr")] // LINT_ALLOW: helium-linux 내부 GitLab 기본값, --gitlab-url로 override
+        gitlab_url: String,
+        /// GitLab API token
+        #[arg(long)]
+        token: Option<String>,
+        /// 버전 태그 (미지정 시 latest)
+        #[arg(long)]
+        version: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -395,6 +430,27 @@ fn main() -> Result<()> {
         ),
         Cmd::X11Setup { vmid } => x11_setup(&vmid),
         Cmd::X11Simulate { vmid, timeout_sec } => x11_simulate(&vmid, timeout_sec),
+        Cmd::Release {
+            vmid,
+            project_id,
+            token,
+            gitlab_url,
+        } => release(&vmid, project_id, token.as_deref(), &gitlab_url),
+        Cmd::Install {
+            dir,
+            bin_dir,
+            project_id,
+            gitlab_url,
+            token,
+            version,
+        } => install_helium(
+            &dir,
+            &bin_dir,
+            project_id,
+            &gitlab_url,
+            token.as_deref(),
+            version.as_deref(),
+        ),
     }
 }
 
@@ -1369,6 +1425,305 @@ fn validate_run_url(url: &str) -> Result<()> {
         return Ok(());
     }
     anyhow::bail!("지원하지 않는 URL 형식: {url} (about:/http://https://file://만 허용)")
+}
+
+fn release(vmid: &str, project_id: u32, token: Option<&str>, gitlab_url: &str) -> Result<()> {
+    let api_token = token
+        .map(str::to_owned)
+        .or_else(|| std::env::var("GITLAB_API_TOKEN").ok())
+        .context("GitLab API token 없음 — --token 또는 GITLAB_API_TOKEN 환경변수 필요")?;
+
+    // 버전 조회
+    let ver_script = r#"python3 /home/builder/workspace/helium-linux/helium-chromium/utils/helium_version.py \
+  --tree /home/builder/workspace/helium-linux/helium-chromium \
+  --platform-tree /home/builder/workspace/helium-linux \
+  --print"#;
+    let version = common::run_capture(
+        "pct",
+        &[
+            "exec", vmid, "--", "runuser", "-l", "builder", "-c", ver_script,
+        ],
+    )?
+    .trim()
+    .to_owned();
+    if version.is_empty() {
+        anyhow::bail!("버전을 가져오지 못함");
+    }
+    println!("[release] version={version}");
+
+    // 패키징 스크립트 (tar.xz 생성)
+    let pkg_script = format!(
+        r#"set -euo pipefail
+WORKSPACE=/home/builder/workspace/helium-linux
+BUILD_DIR=$WORKSPACE/build/src/out/Default
+RELEASE_DIR=$WORKSPACE/build/release
+VERSION={version}
+ARCH=x86_64
+NAME=helium-$VERSION-$ARCH
+TARBALL_DIR=$RELEASE_DIR/${{NAME}}_linux
+TAR_PATH=$RELEASE_DIR/${{NAME}}_linux.tar.xz
+
+mkdir -p "$TARBALL_DIR"
+
+FILES="helium chrome_100_percent.pak chrome_200_percent.pak helium_crashpad_handler \
+chromedriver icudtl.dat libEGL.so libGLESv2.so libvk_swiftshader.so libvulkan.so.1 \
+locales product_logo_256.png resources.pak v8_context_snapshot.bin \
+vk_swiftshader_icd.json xdg-mime xdg-settings"
+
+for f in $FILES; do
+  [ -e "$BUILD_DIR/$f" ] && cp -r "$BUILD_DIR/$f" "$TARBALL_DIR/" || echo "SKIP $f"
+done
+
+cp "$WORKSPACE/package/helium.desktop" "$TARBALL_DIR/"
+cp "$WORKSPACE/package/apparmor.cfg" "$TARBALL_DIR/"
+cp "$WORKSPACE/package/helium-wrapper.sh" "$TARBALL_DIR/helium-wrapper"
+(cd "$TARBALL_DIR" && ln -sf helium chrome)
+
+find "$TARBALL_DIR" -type f -exec file {{}} + | awk -F: '/ELF/ {{print $1}}' | xargs eu-strip 2>/dev/null || true
+
+SIZE=$(du -sk "$TARBALL_DIR" | cut -f1)
+echo "packaging ${{NAME}}_linux (${{SIZE}}k) → tar.xz"
+(cd "$RELEASE_DIR" && tar cf - "${{NAME}}_linux" | xz -e -T0 > "$TAR_PATH")
+ls -lh "$TAR_PATH"
+echo "$TAR_PATH"
+"#,
+        version = version
+    );
+
+    run_builder(vmid, &pkg_script)?;
+
+    // 호스트로 파일 복사
+    let tar_name = format!("helium-{version}-x86_64_linux.tar.xz");
+    let lxc_path = format!(
+        "/home/builder/workspace/helium-linux/build/release/{tar_name}"
+    );
+    let host_path = format!("/tmp/{tar_name}");
+    common::run_passthrough("pct", &["pull", vmid, &lxc_path, &host_path])?;
+
+    // GitLab 파일 업로드
+    println!("[release] GitLab 업로드 중…");
+    let upload_out = std::process::Command::new("curl")
+        .args([
+            "-s",
+            "--header",
+            &format!("PRIVATE-TOKEN: {api_token}"),
+            "--form",
+            &format!("file=@{host_path}"),
+            &format!("{gitlab_url}/api/v4/projects/{project_id}/uploads"),
+        ])
+        .output()
+        .context("curl 실행 실패")?;
+    let upload_json = String::from_utf8_lossy(&upload_out.stdout);
+    let asset_url = parse_json_field(&upload_json, "full_path")
+        .map(|p| format!("{gitlab_url}{p}"))
+        .context("업로드 응답에서 full_path 추출 실패")?;
+    println!("[release] 업로드 완료: {asset_url}");
+
+    // 태그 생성 (이미 있으면 skip)
+    let tag = format!("v{version}");
+    let tag_body = format!(
+        r#"{{"tag_name":"{tag}","ref":"main","message":"Helium {version}"}}"#
+    );
+    let tag_out = std::process::Command::new("curl")
+        .args([
+            "-s", "-X", "POST",
+            "--header", &format!("PRIVATE-TOKEN: {api_token}"),
+            "--header", "Content-Type: application/json",
+            "--data", &tag_body,
+            &format!("{gitlab_url}/api/v4/projects/{project_id}/repository/tags"),
+        ])
+        .output()
+        .context("태그 생성 curl 실패")?;
+    let tag_resp = String::from_utf8_lossy(&tag_out.stdout);
+    if tag_resp.contains("already exists") {
+        println!("[release] 태그 {tag} 이미 존재 — skip");
+    } else {
+        println!("[release] 태그 {tag} 생성");
+    }
+
+    // GitLab Release 생성
+    let desc = format!(
+        "## Helium v{version}\\n\\nChromium 기반 프라이버시 브라우저 — Linux x86_64 빌드.\\n\\n### 설치\\n```bash\\npxi run chrome-browser-dev install\\n```\\n또는 수동:\\n```bash\\ntar xf {tar_name}\\ncd helium-{version}-x86_64_linux\\n./helium-wrapper\\n```"
+    );
+    let rel_body = format!(
+        r#"{{"name":"Helium v{version} (Linux x86_64)","tag_name":"{tag}","description":"{desc}","assets":{{"links":[{{"name":"{tar_name}","url":"{asset_url}","link_type":"package"}}]}}}}"#
+    );
+    let rel_out = std::process::Command::new("curl")
+        .args([
+            "-s", "-X", "POST",
+            "--header", &format!("PRIVATE-TOKEN: {api_token}"),
+            "--header", "Content-Type: application/json",
+            "--data", &rel_body,
+            &format!("{gitlab_url}/api/v4/projects/{project_id}/releases"),
+        ])
+        .output()
+        .context("릴리즈 생성 curl 실패")?;
+    let rel_resp = String::from_utf8_lossy(&rel_out.stdout);
+    if let Some(url) = parse_json_field(&rel_resp, "tag_name") {
+        println!("[release] 완료: {gitlab_url}/root/helium-linux/-/releases/{url}");
+    } else {
+        println!("[release] 응답: {rel_resp}");
+    }
+
+    let _ = std::fs::remove_file(&host_path);
+    Ok(())
+}
+
+fn install_helium(
+    dir: &str,
+    bin_dir: &str,
+    project_id: u32,
+    gitlab_url: &str,
+    token: Option<&str>,
+    version: Option<&str>,
+) -> Result<()> {
+    // 버전 결정
+    let tag = if let Some(v) = version {
+        if v.starts_with('v') {
+            v.to_owned()
+        } else {
+            format!("v{v}")
+        }
+    } else {
+        let api_token = token
+            .map(str::to_owned)
+            .or_else(|| std::env::var("GITLAB_API_TOKEN").ok())
+            .unwrap_or_default();
+        let mut args = vec![
+            "-s".to_owned(),
+            format!("{gitlab_url}/api/v4/projects/{project_id}/releases?per_page=1"),
+        ];
+        if !api_token.is_empty() {
+            args.insert(0, format!("PRIVATE-TOKEN: {api_token}"));
+            args.insert(0, "--header".to_owned());
+        }
+        let out = std::process::Command::new("curl")
+            .args(&args)
+            .output()
+            .context("릴리즈 목록 조회 실패")?;
+        let body = String::from_utf8_lossy(&out.stdout);
+        parse_json_field(&body, "tag_name")
+            .context("릴리즈 태그를 가져오지 못함 — --version으로 명시하세요")?
+    };
+
+    let version_num = tag.trim_start_matches('v');
+    let tar_name = format!("helium-{version_num}-x86_64_linux.tar.xz");
+    println!("[install] Helium {tag} 설치 시작");
+    println!("[install] 설치 경로: {dir}");
+
+    // 아키텍처 확인
+    let arch = std::process::Command::new("uname")
+        .arg("-m")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default();
+    if arch != "x86_64" {
+        anyhow::bail!("이 릴리즈는 x86_64 전용입니다 (현재 아키텍처: {arch})");
+    }
+
+    // 릴리즈 에셋 URL 조회
+    let api_token = token
+        .map(str::to_owned)
+        .or_else(|| std::env::var("GITLAB_API_TOKEN").ok())
+        .unwrap_or_default();
+    let rel_url = format!(
+        "{gitlab_url}/api/v4/projects/{project_id}/releases/{tag}"
+    );
+    let mut curl_args = vec!["-s".to_owned(), rel_url.clone()];
+    if !api_token.is_empty() {
+        curl_args.insert(0, format!("PRIVATE-TOKEN: {api_token}"));
+        curl_args.insert(0, "--header".to_owned());
+    }
+    let rel_out = std::process::Command::new("curl")
+        .args(&curl_args)
+        .output()
+        .context("릴리즈 정보 조회 실패")?;
+    let rel_body = String::from_utf8_lossy(&rel_out.stdout);
+    let download_url = parse_json_field(&rel_body, "url")
+        .context("릴리즈 에셋 URL을 찾지 못함")?;
+
+    // 다운로드
+    let tmp_tar = format!("/tmp/{tar_name}");
+    println!("[install] 다운로드: {download_url}");
+    let mut dl_args = vec![
+        "-L".to_owned(), "--fail".to_owned(),
+        "-o".to_owned(), tmp_tar.clone(),
+        download_url,
+    ];
+    if !api_token.is_empty() {
+        dl_args.insert(0, format!("PRIVATE-TOKEN: {api_token}"));
+        dl_args.insert(0, "--header".to_owned());
+    }
+    let dl_status = std::process::Command::new("curl")
+        .args(&dl_args)
+        .status()
+        .context("다운로드 실패")?;
+    if !dl_status.success() {
+        anyhow::bail!("다운로드 실패");
+    }
+
+    // 설치
+    let tmp_dir = format!("/tmp/helium-install-{version_num}");
+    std::fs::create_dir_all(&tmp_dir)?;
+    common::run_passthrough("tar", &["xf", &tmp_tar, "-C", &tmp_dir])?;
+
+    // 기존 설치 제거 후 이동
+    let _ = std::fs::remove_dir_all(dir);
+    let extracted = format!("{tmp_dir}/helium-{version_num}-x86_64_linux");
+    std::fs::rename(&extracted, dir)
+        .or_else(|_| {
+            common::run_passthrough("cp", &["-r", &extracted, dir])
+        })
+        .context(format!("{dir} 설치 실패"))?;
+
+    // wrapper 실행 권한
+    let wrapper = format!("{dir}/helium-wrapper");
+    common::run_passthrough("chmod", &["+x", &wrapper, &format!("{dir}/helium")])?;
+
+    // symlink
+    std::fs::create_dir_all(bin_dir)?;
+    let link = format!("{bin_dir}/helium");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&wrapper, &link)
+        .context(format!("symlink {link} → {wrapper} 실패"))?;
+
+    // .desktop 파일
+    let desktop_src = format!("{dir}/helium.desktop");
+    let desktop_dst = "/usr/local/share/applications/helium.desktop";
+    if std::path::Path::new(&desktop_src).exists() {
+        let _ = std::fs::create_dir_all("/usr/local/share/applications");
+        let content = std::fs::read_to_string(&desktop_src)?;
+        let content = content.replace("Exec=helium-wrapper", &format!("Exec={wrapper}"));
+        std::fs::write(desktop_dst, content)?;
+    }
+
+    // 정리
+    let _ = std::fs::remove_file(&tmp_tar);
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    println!("[install] 완료");
+    println!("  바이너리: {dir}/helium");
+    println!("  실행:     {link}  (또는 {wrapper})");
+    println!("  버전:     Helium {tag}");
+    Ok(())
+}
+
+fn parse_json_field<'a>(json: &'a str, field: &str) -> Option<String> {
+    let key = format!("\"{field}\"");
+    let pos = json.find(&key)?;
+    let after = json[pos + key.len()..].trim_start();
+    let after = after.strip_prefix(':')?.trim_start();
+    if after.starts_with('"') {
+        let inner = &after[1..];
+        let end = inner.find('"')?;
+        Some(inner[..end].to_owned())
+    } else if after.starts_with('[') {
+        // 배열에서 첫 번째 객체의 "url" 필드
+        let inner = &after[1..];
+        parse_json_field(inner, field)
+    } else {
+        None
+    }
 }
 
 fn toml_string(value: &str) -> String {
